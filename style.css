@@ -1,0 +1,50 @@
+/* HUD styling: dark parchment / gold. All HUD DOM lives under #hud (see src/ui.js). */
+html, body { margin: 0; height: 100%; overflow: hidden; background: #1a140e; font-family: Georgia, 'Palatino Linotype', serif; color: #e8d7a8; user-select: none; }
+#view { position: fixed; inset: 0; display: block; }
+#hud { position: fixed; inset: 0; pointer-events: none; }
+#hud > * { position: absolute; }
+.panel { background: linear-gradient(#2a2118, #1a140e); border: 1px solid #c9a24b; box-shadow: 0 0 0 2px #0d0a07, 0 4px 14px rgba(0,0,0,.6); pointer-events: auto; }
+button { font-family: inherit; color: #e8d7a8; background: linear-gradient(#3a2e20, #231a11); border: 1px solid #c9a24b; padding: 6px 10px; cursor: pointer; }
+button:hover { background: linear-gradient(#4a3b28, #2d2216); }
+button.on { background: linear-gradient(#6a4a20, #4a3214); color: #fff3c8; }
+
+#top-center { left: 50%; top: 10px; transform: translateX(-50%); width: 420px; text-align: center; }
+#balance { height: 14px; display: flex; border: 1px solid #c9a24b; background: #0d0a07; }
+#bal-red { background: #b32a2a; width: 50%; transition: width .5s; }
+#bal-blue { background: #2c4fa0; flex: 1; }
+#bal-text { display: flex; justify-content: space-between; font-size: 14px; margin-top: 2px; text-shadow: 0 1px 2px #000; }
+#timer { color: #f0d890; letter-spacing: 2px; }
+#messages { margin-top: 6px; font-size: 14px; }
+#messages div { text-shadow: 0 1px 3px #000; animation: fade 6s forwards; }
+#messages .player { color: #ff9a8a; } #messages .enemy { color: #9ab8ff; }
+@keyframes fade { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
+
+#objectives { left: 10px; top: 10px; padding: 8px 12px; min-width: 190px; }
+#objectives h3 { margin: 0 0 6px; font-size: 15px; color: #f0d890; border-bottom: 1px solid #6a5424; }
+#objectives ul { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+#objectives li { margin: 4px 0; } #objectives li.done { color: #9fd07a; text-decoration: line-through; }
+.box { display: inline-block; width: 11px; height: 11px; border: 1px solid #c9a24b; margin-right: 7px; vertical-align: -1px; }
+li.done .box { background: #9fd07a; }
+#obj-hint { font-size: 12px; color: #b9a878; margin-top: 4px; }
+
+#minimap-wrap { right: 10px; top: 10px; padding: 3px; }
+#minimap { display: block; width: 200px; height: 200px; cursor: pointer; }
+
+#cards { left: 50%; bottom: 8px; transform: translateX(-50%); display: flex; gap: 5px; max-width: 70vw; flex-wrap: wrap; justify-content: center; pointer-events: none; }
+.card { pointer-events: auto; width: 70px; height: 92px; padding: 3px; box-sizing: border-box; cursor: pointer; background: linear-gradient(#2a2118, #1a140e); border: 1px solid #7a6330; position: relative; }
+.card.selected { border-color: #ffe9a0; box-shadow: 0 0 8px #e8c860; }
+.card canvas { display: block; margin: 0 auto; }
+.card .nm { font-size: 9px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .bar { height: 5px; background: #0d0a07; margin-top: 3px; border: 1px solid #3a2e20; }
+.card .bar i { display: block; height: 100%; }
+.card .hp i { background: #5cb04a; } .card .mo i { background: #d8b840; }
+.card .men { position: absolute; right: 3px; top: 2px; font-size: 10px; }
+.card.wavering { border-color: #d8b840; } .card.routing { border-color: #d03030; opacity: .7; } .card.gone { opacity: .25; pointer-events: none; }
+
+#orders { right: 10px; bottom: 10px; padding: 8px; display: grid; grid-template-columns: repeat(3, 62px); gap: 5px; }
+#help { left: 10px; bottom: 10px; padding: 6px 9px; font-size: 11px; max-width: 310px; line-height: 1.45; opacity: .85; }
+#selbox { display: none; border: 1px solid #ffe9a0; background: rgba(255, 233, 160, .12); pointer-events: none; }
+#banner { left: 50%; top: 35%; transform: translateX(-50%); font-size: 34px; letter-spacing: 4px; color: #f0d890; text-shadow: 0 2px 8px #000; pointer-events: none; }
+#endscreen { inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0, 0, 0, .55); }
+#endscreen .panel { padding: 24px 40px; text-align: center; }
+#endscreen h1 { margin: 0 0 8px; font-size: 40px; color: #f0d890; letter-spacing: 3px; }

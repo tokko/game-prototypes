@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Amber Field</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="hud">
+  <div id="top-center">
+    <div id="balance"><div id="bal-red"></div><div id="bal-blue"></div></div>
+    <div id="bal-text"><span id="str-red">0</span><span id="timer">00:00</span><span id="str-blue">0</span></div>
+    <div id="messages"></div>
+  </div>
+  <div id="objectives" class="panel">
+    <h3>Objectives</h3>
+    <ul>
+      <li id="obj-village"><span class="box"></span>Take the village</li>
+      <li id="obj-guns"><span class="box"></span>Silence the enemy guns</li>
+      <li id="obj-rout"><span class="box"></span>Rout the enemy army</li>
+    </ul>
+    <div id="obj-hint"></div>
+  </div>
+  <div id="minimap-wrap" class="panel"><canvas id="minimap" width="200" height="200"></canvas></div>
+  <div id="cards"></div>
+  <div id="orders" class="panel">
+    <button id="o-halt" title="Halt (Space/H)">Halt</button>
+    <button id="o-fire" title="Fire at will / hold fire (F)">Fire</button>
+    <button id="o-run" title="Run / charge (R)">Run</button>
+    <button id="o-tight" title="Tight formation">Tight</button>
+    <button id="o-loose" title="Loose formation">Loose</button>
+  </div>
+  <div id="help" class="panel">
+    <b>Controls</b><br>
+    LMB select / box / dbl-click type &middot; RMB move, drag = formation line, on enemy = attack<br>
+    WASD/arrows/edge pan &middot; Wheel zoom &middot; Q/E or MMB rotate<br>
+    Space/H halt &middot; F fire &middot; R run/charge &middot; Ctrl+1-9 group &middot; P pause
+  </div>
+  <div id="selbox"></div>
+  <div id="banner"></div>
+  <div id="endscreen"><div class="panel"><h1 id="end-title"></h1><p id="end-text"></p><button id="end-btn">Fight again</button></div></div>
+</div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
