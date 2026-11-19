@@ -1,6 +1,7 @@
 // Bootstrap, world state, game phase flow and the main loop.
-// game.phase: 'intro' -> 'battle' -> 'ended'. startBattle() is the single place the battle begins
-// (a 'deployment' phase can be inserted between intro and startBattle).
+// game.phase: 'intro' -> 'deployment' -> 'battle' -> 'ended'. startBattle() is the single place the battle begins
+// (called by the Begin Battle button / Enter during deployment). No sim stepping happens before it.
+import * as THREE from 'three';
 import { createScene } from './scene.js';
 import { createTerrain, VILLAGE } from './terrain.js';
 import { RTSCamera } from './camera.js';
@@ -34,22 +35,71 @@ const ai = new EnemyAI(world);
 const rts = new RTSCamera(camera, terrain);
 const input = new Input(renderer.domElement, camera, rts, world, game);
 const ui = new UI(world, game, input, rts);
+window.ui = ui; // exposed for quick headless checks (like game/world)
 
 // ---- phase flow
 const INTRO_LEN = 7;
 rts.free = false;
 game.skipIntro = () => { if (game.phase === 'intro') game.introT = INTRO_LEN; };
 window.addEventListener('mousedown', () => game.skipIntro());
+// Deployment zones (world XZ rectangles). The player's zone clamps repositioning; the enemy's is shown faintly.
+const ZONE = { x0: -340, x1: 340, z0: 215, z1: 420 };
+const ENEMY_ZONE = { x0: -340, x1: 340, z0: -265, z1: -30 };
+let zoneGroup = null;
+// translucent rectangle draped over the terrain heights, plus a brighter edge strip
+function makeZone(zn, color, fillOp, edgeColor, edgeOp) {
+  const STEP = 8, LIFT = 0.8, T = 3.6, h = (x, z) => terrain.heightAt(x, z);
+  const nx = Math.ceil((zn.x1 - zn.x0) / STEP), nz = Math.ceil((zn.z1 - zn.z0) / STEP), pos = [], idx = [];
+  for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) {
+    const x = zn.x0 + (zn.x1 - zn.x0) * i / nx, z = zn.z0 + (zn.z1 - zn.z0) * j / nz;
+    pos.push(x, h(x, z) + LIFT, z);
+  }
+  for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { const a = j * (nx + 1) + i, b = a + 1, c = a + nx + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
+  const mk = (p, ix, op, col, order, offset) => {
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3)); g.setIndex(ix);
+    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: op, depthWrite: false, side: THREE.DoubleSide, fog: false, polygonOffset: true, polygonOffsetFactor: offset, polygonOffsetUnits: offset }));
+    m.frustumCulled = false; m.renderOrder = order; return m;
+  };
+  const ep = [], ei = [];
+  const strip = (x0, z0, x1, z1, ix, iz) => {
+    const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 4), base = ep.length / 3;
+    for (let k = 0; k <= n; k++) {
+      const x = x0 + (x1 - x0) * k / n, z = z0 + (z1 - z0) * k / n;
+      ep.push(x, h(x, z) + LIFT + 0.2, z, x + ix * T, h(x + ix * T, z + iz * T) + LIFT + 0.2, z + iz * T);
+      if (k < n) { const a = base + k * 2; ei.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    }
+  };
+  strip(zn.x0, zn.z0, zn.x1, zn.z0, 0, 1); strip(zn.x0, zn.z1, zn.x1, zn.z1, 0, -1);
+  strip(zn.x0, zn.z0, zn.x0, zn.z1, 1, 0); strip(zn.x1, zn.z0, zn.x1, zn.z1, -1, 0);
+  const grp = new THREE.Group(); grp.add(mk(pos, idx, fillOp, color, 3, -2), mk(ep, ei, edgeOp, edgeColor, 4, -3));
+  return grp;
+}
+function clearZone() {
+  if (!zoneGroup) return;
+  scene.remove(zoneGroup);
+  zoneGroup.traverse(o => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
+  zoneGroup = null; game.zone = null;
+}
+game.startDeployment = () => {
+  game.phase = 'deployment'; rts.free = true;
+  rts.set(0, 300, 0, 470);
+  zoneGroup = new THREE.Group();
+  zoneGroup.add(makeZone(ZONE, 0xe03820, 0.3, 0xffe080, 1), makeZone(ENEMY_ZONE, 0x3050c0, 0.07, 0x6a88ff, 0.35));
+  scene.add(zoneGroup); game.zone = ZONE;
+  ui.banner('', 0);
+};
 game.startBattle = () => {
+  if (game.phase === 'battle' || game.phase === 'ended') return;
+  if (game.phase !== 'deployment') rts.set(0, 250, 0, 280); // keep the player's own camera when coming from deployment
+  clearZone();
   game.phase = 'battle'; rts.free = true;
-  rts.set(0, 250, 0, 280);
   ui.banner('The battle begins', 3000);
 };
 function introUpdate(dt) {
   game.introT += dt;
   const k = Math.min(1, game.introT / INTRO_LEN), e = k * k * (3 - 2 * k);
   rts.set(-80 + 80 * e, -120 + 370 * e, 1.1 * (1 - e), 650 - 370 * e);
-  if (k >= 1) game.startBattle();
+  if (k >= 1) game.startDeployment();
 }
 
 // ---- simulation
@@ -93,7 +143,7 @@ game.step = step; // exposed for quick headless checks
 let last = performance.now(), visTime = 0;
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
   visTime += dt;
   if (game.phase === 'intro') introUpdate(dt);
   input.update(dt);

@@ -13,7 +13,7 @@ export class RTSCamera {
   }
   pitchFor(d) {
     const k = Math.min(1, Math.max(0, (d - this.minDist) / (this.maxDist - this.minDist)));
-    return 0.38 + (1.05 - 0.38) * Math.pow(k, 0.7);   // flatter when close
+    return 0.42 + 0.627 * k;   // ~24 deg close, ~38 deg at default zoom (dist ~280), 60 deg at max zoom-out
   }
   get pitch() { return this.pitchFor(this.s.dist); }
   focusOn(x, z) { this.t.fx = x; this.t.fz = z; this.clamp(); }
@@ -43,6 +43,8 @@ export class RTSCamera {
     const y = Math.max(fy + Math.sin(p) * dist, this.terrain.heightAt(x, z) + 4);
     this.cam.position.set(x, y, z);
     this.cam.lookAt(fx, fy, fz);
+    const k = Math.min(1, Math.max(0, (dist - this.minDist) / (this.maxDist - this.minDist)));
+    this.cam.rotateX(0.19 * (1 - k));   // tilt the view up a little so the horizon haze shows above the field
     this.cam.updateMatrixWorld();
   }
   // scripted placement (intro)

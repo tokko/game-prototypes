@@ -8,6 +8,16 @@ export const Orders = {
   toggleFire(sel) { const v = !sel.every(r => r.fireAtWill); for (const r of sel) r.fireAtWill = v; },
   toggleRun(sel) { const v = !sel.every(r => r.run); for (const r of sel) if (r.active) r.run = v; },
   formation(sel, mode) { for (const r of sel) r.setSpacing(mode); },
+  attack(sel, regs) {
+    for (const r of sel) {
+      let best = null, bd = 1e9;
+      for (const t of regs) {
+        if (t.side === r.side || t.state === 'gone') continue;
+        const d = Math.hypot(t.x - r.x, t.z - r.z); if (d < bd) { bd = d; best = t; }
+      }
+      if (best) r.cmdAttack(best);
+    }
+  },
 };
 
 export class Input {
@@ -26,6 +36,7 @@ export class Input {
   }
 
   get canOrder() { return this.game.phase === 'battle'; }
+  get deploying() { return this.game.phase === 'deployment'; }
 
   select(list, add) {
     const w = this.world;
@@ -129,6 +140,7 @@ export class Input {
     } else if (e.button === 2 && this.right) {
       const r = this.right; this.right = null; this.ghost.count = 0;
       if (this.canOrder && this.world.selection.length) this.issueRight(e, r);
+      else if (this.deploying && this.world.selection.length) this.issueDeploy(r);
     } else if (e.button === 1) this.mid = null;
   }
   onDbl(e) {
@@ -151,6 +163,28 @@ export class Input {
     }
     for (const a of this.dragPlan(sel, rd.p0, rd.p1)) a.r.cmdMove(a.x, a.z, a.f, a.files, a.r.run);
   }
+  // ---- deployment: units snap instantly, clamped inside the player's zone; attack orders are ignored
+  zoneClamp(p) { const z = this.game.zone; return { x: Math.max(z.x0, Math.min(z.x1, p.x)), z: Math.max(z.z0, Math.min(z.z1, p.z)) }; }
+  issueDeploy(rd) {
+    const sel = this.world.selection.filter(r => r.state !== 'gone');
+    if (!sel.length || !this.game.zone || !rd.p0) return;
+    if (!rd.drag || !rd.p1) {
+      const p = this.zoneClamp(rd.p0);
+      let cx = 0, cz = 0; for (const r of sel) { cx += r.x; cz += r.z; } cx /= sel.length; cz /= sel.length;
+      for (const r of sel) this.placeUnit(r, p.x + (r.x - cx), p.z + (r.z - cz), r.facing, null);
+      return;
+    }
+    for (const a of this.dragPlan(sel, this.zoneClamp(rd.p0), this.zoneClamp(rd.p1))) this.placeUnit(a.r, a.x, a.z, a.f, a.files);
+  }
+  placeUnit(r, x, z, f, files) {
+    const zn = this.game.zone;
+    r.facing = f; if (files) r.setFiles(files); r.updateLayout();
+    const c = Math.abs(Math.cos(f)), sn = Math.abs(Math.sin(f)), ex = c * r.halfW + sn * r.halfD, ez = sn * r.halfW + c * r.halfD;
+    const cl = (v, a, b) => a > b ? (a + b) / 2 : Math.max(a, Math.min(b, v));
+    r.x = cl(x, zn.x0 + ex, zn.x1 - ex); r.z = cl(z, zn.z0 + ez, zn.z1 - ez);
+    r.order = { type: 'idle' }; r.run = false; r.speedNow = 0;
+    for (const sd of r.soldiers) { const t = r.slotWorld(sd); sd.x = t[0]; sd.z = t[1]; sd.yaw = f; }
+  }
   // compute per-regiment destinations for a drawn line
   dragPlan(sel, p0, p1) {
     const dx = p1.x - p0.x, dz = p1.z - p0.z, len = Math.max(1, Math.hypot(dx, dz)), ux = dx / len, uz = dz / len;
@@ -170,9 +204,11 @@ export class Input {
   updateGhost() {
     const g = this.ghost, rd = this.right;
     g.count = 0;
-    if (!rd || !rd.drag || !rd.p1 || !rd.p0 || !this.canOrder) return;
+    if (!rd || !rd.drag || !rd.p1 || !rd.p0 || !(this.canOrder || (this.deploying && this.game.zone))) return;
     const sel = this.world.selection.filter(r => r.state !== 'gone'), th = this.world.terrain, m = new THREE.Matrix4();
-    for (const a of this.dragPlan(sel, rd.p0, rd.p1)) {
+    if (!sel.length) return;
+    const dep = this.deploying;
+    for (const a of this.dragPlan(sel, dep ? this.zoneClamp(rd.p0) : rd.p0, dep ? this.zoneClamp(rd.p1) : rd.p1)) {
       const r = a.r, counts = { all: 0, pike: 0, musk: 0, guns: r.guns };
       for (const s of r.soldiers) counts[s.role]++;
       const [lo, hi] = [r.def.formation === 'grid' ? 6 : 4, r.maxMen];
@@ -198,15 +234,22 @@ export class Input {
     if (!down) return;
     if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
     if (this.game.phase === 'intro') { this.game.skipIntro && this.game.skipIntro(); return; }
+    if (this.deploying && k === 'enter') { this.game.startBattle(); return; }
     const sel = this.world.selection.filter(r => r.state !== 'gone');
-    if (k === 'p') this.world.paused = !this.world.paused;
-    if (k === '=' || k === '+') this.world.speed = Math.min(4, this.world.speed * 2);
-    if (k === '-') this.world.speed = Math.max(0.5, this.world.speed / 2);
+    if (e.ctrlKey && k === 'a') { e.preventDefault(); this.select(this.world.regs.filter(r => r.side === 'player'), false); return; }
+    if (!this.deploying) {
+      if (k === 'p') this.world.paused = !this.world.paused;
+      if (k === '=' || k === '+') this.world.speed = Math.min(4, this.world.speed * 2);
+      if (k === '-') this.world.speed = Math.max(0.5, this.world.speed / 2);
+    }
     if (k === 'escape') this.select([], false);
     if (!this.canOrder) return;
     if (k === ' ' || k === 'h') Orders.halt(sel);
     else if (k === 'f') Orders.toggleFire(sel);
     else if (k === 'r') Orders.toggleRun(sel);
+    else if (k === 't') Orders.formation(sel, 'tight');
+    else if (k === 'l') Orders.formation(sel, 'loose');
+    else if (k === 'x') Orders.attack(sel, this.world.regs);
     else if (/^[1-9]$/.test(k)) {
       if (e.ctrlKey) { this.groups[k] = [...sel]; e.preventDefault(); }
       else if (this.groups[k]) { this.select(this.groups[k], false); if (e.detail === 2) this.focusSel(); }

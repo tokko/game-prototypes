@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { layout, defaultFiles, fileRange } from './formations.js';
 import { HALF } from './terrain.js';
 
-export const SCALE = 1.45;
+export const SCALE = 2.1;
 export const SIDE_COLOR = { player: '#b32a2a', enemy: '#2c4fa0' };
 
 export const TYPES = {
@@ -221,6 +221,7 @@ export class UnitRenderer {
     const make = (key, geo) => {
       const m = new THREE.InstancedMesh(geo, mat, Math.max(1, cap[key] || 1));
       m.count = 0; m.frustumCulled = false; m.castShadow = true; m.receiveShadow = false;
+      m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(m.instanceMatrix.count * 3).fill(1), 3);
       this.meshes[key] = m; scene.add(m);
     };
     for (const side of ['player', 'enemy']) for (const k of Object.keys(models.soldier[side])) make(`${side}_${k}`, models.soldier[side][k]);
@@ -236,7 +237,7 @@ export class UnitRenderer {
     r.ring = new Ring(0xe8c860, 0.9); r.targetRing = new Ring(0xd03030, 0.8); r.destRing = new Ring(0xe8c860, 0.4);
     for (const g of [r.ring, r.targetRing, r.destRing]) this.ringGroup.add(g.mesh);
   }
-  put(key, x, y, z, yaw, s) {
+  put(key, x, y, z, yaw, s, v = 1) {
     const m = this.meshes[key]; const i = m.count;
     if (i >= m.instanceMatrix.count) return;
     const a = m.instanceMatrix.array, o = i * 16, c = Math.cos(yaw) * s, sn = Math.sin(yaw) * s;
@@ -244,6 +245,7 @@ export class UnitRenderer {
     a[o + 4] = 0; a[o + 5] = s; a[o + 6] = 0; a[o + 7] = 0;
     a[o + 8] = sn; a[o + 9] = 0; a[o + 10] = c; a[o + 11] = 0;
     a[o + 12] = x; a[o + 13] = y; a[o + 14] = z; a[o + 15] = 1;
+    const ca = m.instanceColor.array; ca[i * 3] = ca[i * 3 + 1] = ca[i * 3 + 2] = v;
     m.count++;
   }
   update(time, camera, camDist) {
@@ -256,12 +258,13 @@ export class UnitRenderer {
       for (const s of r.soldiers) {
         const y = th.heightAt(s.x, s.z);
         const bob = s.mv ? Math.abs(Math.sin(time * 9 + s.phase)) * (cav ? 0.18 : 0.1) : Math.sin(time * 0.8 + s.phase) * 0.01;
+        const v = 0.86 + (s.phase % 1) * 0.28;   // per-figure tone variation
         let kind = d.kind;
         if (d.formation === 'tercio') kind = s.role;
         if (cav) {
-          this.put(`horse${s.hv}`, s.x, y + bob, s.z, s.yaw, SCALE);
-          this.put(`${r.side}_${kind}`, s.x, y + bob + 1.3 * SCALE, s.z, s.yaw, SCALE);
-        } else this.put(`${r.side}_${kind}`, s.x, y + bob * SCALE, s.z, s.yaw, SCALE);
+          this.put(`horse${s.hv}`, s.x, y + bob, s.z, s.yaw, SCALE, v);
+          this.put(`${r.side}_${kind}`, s.x, y + bob + 1.3 * SCALE, s.z, s.yaw, SCALE, v);
+        } else this.put(`${r.side}_${kind}`, s.x, y + bob * SCALE, s.z, s.yaw, SCALE, v);
       }
       if (d.formation === 'battery') {
         const c = Math.cos(r.facing), sn = Math.sin(r.facing), g = r.layout.guns;
@@ -279,7 +282,7 @@ export class UnitRenderer {
       this.put(`horse1`, gn.x, y, gn.z, gn.facing, SCALE * 1.05);
       this.put(`${gn.side}_hrider`, gn.x, y + 1.3 * SCALE * 1.05, gn.z, gn.facing, SCALE * 1.05);
     }
-    for (const k in this.meshes) this.meshes[k].instanceMatrix.needsUpdate = true;
+    for (const k in this.meshes) { this.meshes[k].instanceMatrix.needsUpdate = true; this.meshes[k].instanceColor.needsUpdate = true; }
 
     // banners & rings
     const sel = w.selection;
@@ -347,7 +350,7 @@ export class Banner {
     const r = this.r;
     const key = `${r.state}|${r.men}|${r.selected}`;
     if (key !== this.key) { this.key = key; this.draw(); }
-    const s = clamp(camDist * 0.05, 6, 36);
+    const s = clamp(camDist * 0.032, 4.5, 24);
     this.sprite.scale.set(s * 1.7, s, 1);
     this.sprite.position.set(r.x, th.heightAt(r.x, r.z) + (r.def.cav ? 8 : 9) + s * 0.1, r.z);
     this.sprite.visible = true;
