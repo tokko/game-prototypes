@@ -194,6 +194,30 @@ export function doorTex() {
   });
 }
 
+// Laundry sheet: grey-white cloth with folds and old stains.
+export function sheet() {
+  return canvasTex(64, 96, (ctx, w, h) => {
+    const r = rng(111);
+    for (let x = 0; x < w; x++) { const f = 0.8 + 0.2 * Math.sin(x * 0.55) * Math.sin(x * 0.13 + 2); ctx.fillStyle = `rgb(${(150 * f) | 0},${(150 * f) | 0},${(146 * f) | 0})`; ctx.fillRect(x, 0, 1, h); }
+    for (let i = 0; i < 7; i++) { ctx.fillStyle = `rgba(60,48,36,${0.08 + r() * 0.12})`; ctx.beginPath(); ctx.ellipse(r() * w, r() * h, 3 + r() * 9, 3 + r() * 12, 0, 0, 7); ctx.fill(); }
+  });
+}
+
+// Shrine icon: a dark panel, gilt halo, a hooded figure.
+export function icon() {
+  return canvasTex(64, 96, (ctx, w, h) => {
+    ctx.fillStyle = '#1a120d'; ctx.fillRect(0, 0, w, h);
+    const g = ctx.createRadialGradient(w / 2, h * 0.34, 3, w / 2, h * 0.34, w * 0.45);
+    g.addColorStop(0, 'rgba(210,160,70,0.9)'); g.addColorStop(0.7, 'rgba(120,80,30,0.6)'); g.addColorStop(1, 'rgba(60,40,20,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#0a0705';
+    ctx.beginPath(); ctx.moveTo(w * 0.2, h); ctx.quadraticCurveTo(w * 0.22, h * 0.55, w * 0.38, h * 0.46); ctx.lineTo(w * 0.62, h * 0.46);
+    ctx.quadraticCurveTo(w * 0.78, h * 0.55, w * 0.8, h); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.arc(w / 2, h * 0.34, w * 0.14, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#6b4a22'; ctx.lineWidth = 3; ctx.strokeRect(1.5, 1.5, w - 3, h - 3);
+  });
+}
+
 // Soft radial glow (lamp halos, light pools on the ground).
 export function glow() {
   return canvasTex(128, 128, (ctx, w, h) => {

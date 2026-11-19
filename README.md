@@ -1,6 +1,6 @@
 # Fogbound Walk
 
-A first-person horror walk prototype in Three.js (r170 from a CDN, no build step). Walk a linear path through a village, a forest and a manor estate, then leave. No fail state, no combat, no HUD. About 10-20 minutes at walking pace.
+A first-person horror walk prototype in Three.js (r170 from a CDN, no build step). Walk a linear path through a village, a forest and a manor estate, then leave. No fail state, no combat, no HUD. About 5-6 minutes (about 430 m) at walking pace.
 
 ## Run
 
