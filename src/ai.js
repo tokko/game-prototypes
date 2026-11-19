@@ -48,10 +48,12 @@ export class EnemyAI {
       else if (homeD > 12 && r.order.type === 'idle') this.goHome(r);
       else if (nd > def.range * 2 && homeD > 40) this.goHome(r);
     } else if (id === 'rifle') {
-      const cav = foes.find(f => f.def.cav && f.active && rangeTo(r, f) < 70);
-      if (cav) { r.run = true; r.cmdMove(r.ai.home.x, r.ai.home.z + 40, r.ai.home.f, null, true); return; }
-      if (nd < def.range * 1.5 && homeD < 200) r.cmdAttack(near, false);
+      // skirmish screen: close in on the enemy line to long rifle range and hold there (they take cover / lie down when stationary and
+      // fall back from close infantry and cavalry by themselves, see Regiment.evadeCheck); drift back to the screen position otherwise
+      const lim = this.advance ? 300 : 200;
+      if (nd < def.range * 1.5 && homeD < lim) r.cmdAttack(near, false);
       else if (homeD > 15 && r.order.type === 'idle') this.goHome(r);
+      else if (homeD >= lim && r.order.type !== 'move') this.goHome(r);
     } else if (def.cav) {
       if (r.order.type === 'attack' && r.order.target && r.order.target.state !== 'gone' && r.run) return;
       let best = null, bs = 25;

@@ -1,9 +1,9 @@
 // Ranged fire, cannon balls, melee, morale and routing.
-import { SCALE, rangeTo, obbOverlap, wrapAngle } from './units.js';
+import { SCALE, rangeTo, edgeDist, obbOverlap, wrapAngle } from './units.js';
 
 const R = Math.random;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const G = 14, BALL_V = 105;
+const G = 14, BALL_V = 380;   // roundshot: ~500 units in ~1.3s, near-flat flight
 
 export class Combat {
   constructor(world, fx) { this.w = world; this.fx = fx; this.balls = []; }
@@ -71,7 +71,7 @@ export class Combat {
 
   // ---------------------------------------------------------------- ranged
   acquire(r) {
-    r.aimTarget = null; r.canShoot = false;
+    r.aimTarget = null; r.canShoot = false; r.cands = null;
     const d = r.def;
     if (d.range <= 0 || r.state === 'routing' || (r.run && d.id !== 'artillery')) return;
     if (d.id === 'artillery' && r.deployT < d.deploy) return;
@@ -86,6 +86,9 @@ export class Combat {
       else if (!r.fireAtWill) continue;
       else { if (t.def.id === 'artillery') score *= 0.85; if (t.state === 'routing') score *= 1.4; }
       if (score < bs) { bs = score; best = t; }
+      if (d.id === 'rifle') {   // candidate list for the riflemen's individual target picks
+        (r.cands || (r.cands = [])).push({ t, dist, exp: t === exp, arc: Math.abs(wrapAngle(Math.atan2(t.x - r.x, t.z - r.z) - r.facing)) <= d.arc });
+      }
     }
     if (!best) return;
     r.aimTarget = best;
@@ -99,6 +102,7 @@ export class Combat {
     r.reloadT = Math.max(0, r.reloadT - dt);
     r.aimT -= dt;
     if (r.aimT <= 0) { r.aimT = 0.3 + R() * 0.2; this.acquire(r); }
+    if (def.id === 'rifle') { this.skirmish(r, dt); return; }   // riflemen fire individually, not in volleys
     const t = r.aimTarget;
     if (!t || !r.canShoot || r.reloadT > 0 || r.moving || r.engaged > 0) return;
     if (t.state === 'gone') { r.aimTarget = null; return; }
@@ -115,7 +119,7 @@ export class Combat {
     const f = Math.sin(t.facing) * (r.x - t.x) + Math.cos(t.facing) * (r.z - t.z);
     const fd = f / Math.max(1, Math.hypot(r.x - t.x, r.z - t.z));
     const flank = fd > 0.5 ? 1 : fd < -0.5 ? 1.3 : 1.15;
-    const p = def.acc * fall * dens * flank * (r.state === 'wavering' ? 0.7 : 1);
+    const p = def.acc * fall * dens * flank * this.exposure(t) * (r.state === 'wavering' ? 0.7 : 1);
     let hits = 0;
     for (let i = 0; i < n; i++) if (R() < p) hits++;
     const dx = t.x - r.x, dz = t.z - r.z, dl = Math.max(1, Math.hypot(dx, dz)), ux = dx / dl, uz = dz / dl;
@@ -129,6 +133,56 @@ export class Combat {
       w.later(0.4 + R() * 1.0 + d / 250, () => { if (t.state !== 'gone' && t.men > 0) this.killMany(t, 1, 'shot', r); });
     }
     r.reloadT = def.reload * (0.9 + R() * 0.25);
+  }
+
+  // incoming musket/rifle fire vs skirmishers: loose order x0.7, prone in the open x0.5, kneeling in cover x0.3 (averaged over the men)
+  exposure(t) {
+    if (!t.def.loose) return 1;
+    if (t._expT !== this.w.time) {
+      let sum = 0; for (const s of t.soldiers) sum += s.pwant >= 2 ? 0.5 : s.pwant >= 1 ? 0.3 : 0.7;
+      t._expT = this.w.time; t._exp = t.soldiers.length ? sum / t.soldiers.length : 0.7;
+    }
+    return t._exp;
+  }
+  // each rifleman runs his own reload timer, lines up his own shot (prefers guns and close targets) and fires alone
+  skirmish(r, dt) {
+    const def = r.def, w = this.w, th = w.terrain;
+    const can = !!r.cands && r.cands.length > 0 && !r.moving && r.engaged === 0 && !r.evading && r.state !== 'routing';
+    for (const s of r.soldiers) {
+      s.fireT = Math.max(-1, s.fireT - dt);
+      if (s.fireT > 1.2 || !can || s.mv) { s.aiming = false; if (!can || s.mv) s.tgt = null; continue; }
+      const ok = (t) => t && t.state !== 'gone' && edgeDist(t, s.x, s.z) <= def.range * 1.05;
+      if (!ok(s.tgt)) {
+        let best = null, bs = 1e9;
+        for (const c of r.cands) {
+          if (!c.arc || c.t.state === 'gone') continue;
+          let sc = c.dist * (0.8 + R() * 0.4);
+          if (c.exp) sc *= 0.5; else if (c.t.def.id === 'artillery') sc *= 0.6; else if (c.t.state === 'routing') sc *= 1.4;
+          if (sc < bs) { bs = sc; best = c.t; }
+        }
+        s.tgt = best;
+      }
+      const t = s.tgt;
+      if (!ok(t)) { s.tgt = null; s.aiming = false; continue; }
+      s.aiming = true; s.tyaw = Math.atan2(t.x - s.x, t.z - s.z);
+      if (s.fireT > 0) continue;
+      // fire
+      const d = edgeDist(t, s.x, s.z);
+      const fall = clamp(1 - 0.3 * d / def.range, 0.6, 1);
+      const dens = clamp((t.men / (4 * t.halfW * t.halfD)) / 0.5, 0.5, 1.5);
+      const f = Math.sin(t.facing) * (s.x - t.x) + Math.cos(t.facing) * (s.z - t.z);
+      const fd = f / Math.max(1, Math.hypot(s.x - t.x, s.z - t.z));
+      const flank = fd > 0.5 ? 1 : fd < -0.5 ? 1.3 : 1.15;
+      const steady = s.pwant > 0 ? 1.15 : 0.85;
+      const p = def.acc * fall * dens * flank * steady * this.exposure(t) * (r.state === 'wavering' ? 0.7 : 1);
+      const dx = t.x - s.x, dz = t.z - s.z, dl = Math.max(1, Math.hypot(dx, dz)), ux = dx / dl, uz = dz / dl;
+      const lift = (s.pwant >= 2 ? 0.35 : s.pwant >= 1 ? 0.8 : 1.3) * SCALE;
+      const sx = s.x, sz = s.z;
+      this.fx.musket(sx, th.heightAt(sx, sz) + lift, sz, ux, uz, 0.45);
+      s.shots++; s.aiming = false; s.tgt = null;
+      s.fireT = def.reload * (0.8 + R() * 0.45);
+      if (R() < p) w.later(0.3 + R() * 0.4 + d / 250, () => { if (t.state !== 'gone' && t.men > 0) this.killMany(t, 1, 'shot', r); });
+    }
   }
 
   gunPos(r, i) {
@@ -163,17 +217,19 @@ export class Combat {
   }
 
   updateBalls(dt) {
-    const w = this.w, th = w.terrain, sub = 2, h = dt / sub;
+    const w = this.w, th = w.terrain;
     for (const b of this.balls) {
+      // sub-step by distance (<=1.2 units each) so a fast ball cannot tunnel past soldiers
+      const sub = Math.min(160, Math.max(1, Math.ceil(Math.hypot(b.vx, b.vy, b.vz) * dt / 1.2))), h = dt / sub;
       for (let k = 0; k < sub && b.alive !== false; k++) {
         b.vy -= G * h; b.x += b.vx * h; b.y += b.vy * h; b.z += b.vz * h;
         const gy = th.heightAt(b.x, b.z);
         if (b.y <= gy + 0.2) {
           b.y = gy + 0.2;
-          if (b.vy < 0) {
-            b.vy = -b.vy * 0.45; b.vx *= 0.8; b.vz *= 0.8; b.b++;
+          if (b.vy < 0) {   // ricochet: shallow low hop, losing speed each graze
+            b.vy = Math.min(5, Math.max(2.5, -b.vy * 0.45 + 1.5)); b.vx *= 0.78; b.vz *= 0.78; b.b++;
             this.fx.dustKick(b.x, gy, b.z, 3, 4);
-            if (Math.hypot(b.vx, b.vz) < 7 || b.b > 8) b.alive = false;
+            if (Math.hypot(b.vx, b.vz) < 30 || b.b > 8) b.alive = false;
           }
         }
         if (b.y < gy + 2.6) {
@@ -183,14 +239,14 @@ export class Combat {
             let hit = null;
             for (const s of r.soldiers) {
               const dx = s.x - b.x, dz = s.z - b.z;
-              if (dx * dx + dz * dz < 1.9 && R() < 0.75) { hit = s; break; }
+              if (dx * dx + dz * dz < 1.9 && R() < 0.45) { hit = s; break; }
             }
             if (hit) {
               const i = r.soldiers.indexOf(hit);
               this.killIdx(r, i); this.hurt(r, 1, 'cannon');
               b.vx *= 0.88; b.vz *= 0.88; b.vy *= 0.9;
               this.fx.dustKick(b.x, gy, b.z, 2, 3);
-              if (Math.hypot(b.vx, b.vz) < 7) b.alive = false;
+              if (Math.hypot(b.vx, b.vz) < 40) b.alive = false;
             }
           }
         }

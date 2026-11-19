@@ -336,6 +336,7 @@ function cannon() {
 const FIG_GLSL = /* glsl */`
 attribute vec4 aAnim;
 attribute vec4 iAnim;
+attribute float iPose;   // body pose for foot figures: 0 stand, 1 kneel, 2 prone
 uniform float uTime;
 vec2 figRot(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(v.x * c - v.y * s, v.x * s + v.y * c); }
 void figRX(inout vec3 p, inout vec3 n, vec2 piv, float a) { p.yz = figRot(p.yz - piv, a) + piv; n.yz = figRot(n.yz, a); }
@@ -354,6 +355,16 @@ void figPose(inout vec3 p, inout vec3 n) {
   else if (figIs(part, 5.0)) { figRX(p, n, piv, aim * 1.15 - rec * 0.22); p += aim * vec3(0.0, 0.45, -0.17) + rec * vec3(0.0, 0.0, -0.07); }
   else if (figIs(part, 6.0)) figRX(p, n, piv, aim * 1.1);
   else if (figIs(part, 7.0)) figRX(p, n, piv, -aim * 0.6);
+  float kn = clamp(iPose, 0.0, 1.0) * (1.0 - clamp(iPose - 1.0, 0.0, 1.0)), pr = clamp(iPose - 1.0, 0.0, 1.0);
+  if (kn + pr > 0.001) {   // kneel: front thigh forward, rear knee down; prone: body pitched flat, arms and rifle reaching forward
+    if (part > 0.5 && part < 1.5) { if (knee > 0.0) figRX(p, n, vec2(knee, piv.y), 1.3 * kn); figRX(p, n, piv, -1.2 * kn + 0.1 * pr); }
+    else if (part > 1.5 && part < 2.5) { if (knee > 0.0) figRX(p, n, vec2(knee, piv.y), 2.3 * kn); figRX(p, n, piv, 0.15 * kn - 0.1 * pr); }
+    else if (figIs(part, 3.0)) figRX(p, n, piv, -0.3 * kn - 1.3 * pr);
+    else if (figIs(part, 4.0)) figRX(p, n, piv, -0.3 * kn - 1.4 * pr);
+    else if (figIs(part, 5.0)) figRX(p, n, piv, -0.25 * kn - 1.5 * pr);
+    figRX(p, n, vec2(0.0), 0.28 * kn + 1.5 * pr);
+    p.y += -0.34 * kn + 0.17 * pr;
+  }
   figRX(p, n, vec2(0.0), 0.07 * amp - rec * 0.05);                       // lean into the march, rock back on recoil
   p.y += abs(cos(cyc)) * 0.05 * amp;
   p.x += sin(uTime * 0.9 + cyc * 3.0) * 0.012 * p.y * (1.0 - amp);       // idle sway

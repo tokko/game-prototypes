@@ -733,5 +733,5 @@ export function createFoliage(c) {
     cam.getWorldPosition(cp);
     for (const e of lodList) { const dx = cp.x - e.cx, dz = cp.z - e.cz; e.mesh.visible = dx * dx + dz * dz < e.d2; }
   }
-  return { groundMaterial: groundMat, update, stats };
+  return { groundMaterial: groundMat, update, stats, cover: { trees, hedges, rocks } };   // read-only placement lists (skirmisher cover)
 }

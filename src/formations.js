@@ -22,12 +22,28 @@ function grid(out, n, files, sx, sz) {
   return { w: f * sx, d: ranks * sz };
 }
 
-const CREW = [[-1.8, -0.5], [1.8, -0.5], [-1.5, -2.8], [1.5, -2.8], [0, -4.5], [-2.5, -4.5], [2.5, -4.5]];
+// skirmish open order: pairs of men several metres apart, ranks staggered, every pair irregularly offset (deterministic)
+function scatter(out, n, files, sx, sz) {
+  const h = (i, k) => { const v = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return v - Math.floor(v); };
+  const f = Math.max(2, Math.min(files, n)), ranks = Math.ceil(n / f), pairs = Math.ceil(f / 2);
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (let i = 0; i < n; i++) {
+    const r = Math.floor(i / f), fi = i - r * f, pr = Math.floor(fi / 2), k = pr * 31 + r * 7;
+    const gx = (pr - (pairs - 1) / 2) * sx * 2 + (r % 2) * sx * 0.9 + (h(k, 1) - 0.5) * sx * 0.9;
+    const x = gx + (fi % 2 ? 0.32 : -0.32) * sx * (0.7 + h(i, 4) * 0.6);
+    const z = ((ranks - 1) / 2 - r) * sz + (h(k, 2) - 0.5) * sz * 0.9 + (h(i, 3) - 0.5) * sz * 0.5;
+    out.push(x, z);
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+  }
+  return { w: 2 * Math.max(Math.abs(x0), Math.abs(x1)), d: 2 * Math.max(Math.abs(z0), Math.abs(z1)) };
+}
+
+const CREW =[[-1.8, -0.5], [1.8, -0.5], [-1.5, -2.8], [1.5, -2.8], [0, -4.5], [-2.5, -4.5], [2.5, -4.5]];
 
 export function layout(def, counts, files, sm) {
   const out = { all: [], pike: [], musk: [], guns: [], halfW: 1, halfD: 1 };
   if (def.formation === 'grid') {
-    const g = grid(out.all, counts.all, files, def.sx * sm, def.sz * (0.6 + 0.4 * sm));
+    const g = def.loose ? scatter(out.all, counts.all, files, def.sx * sm, def.sz * (0.6 + 0.4 * sm)) : grid(out.all, counts.all, files, def.sx * sm, def.sz * (0.6 + 0.4 * sm));
     out.halfW = g.w / 2 + 1; out.halfD = g.d / 2 + 1;
   } else if (def.formation === 'tercio') {
     const sx = def.sx * sm, sz = def.sz * sm;

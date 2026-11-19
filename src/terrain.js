@@ -370,7 +370,9 @@ export function createTerrain(scene) {
     return cv;
   }
 
-  return { mesh, heightAt, minimapCanvas, houses, churchPos };
+  // read-only cover lists for skirmishers (trees, hedge runs, rocks, wall stones, house footprints)
+  const cover = { ...fol.cover, walls: stones.filter((w, i) => w.c === 0 && i % 6 === 0).map(w => ({ x: w.x, z: w.z })), houses };
+  return { mesh, heightAt, minimapCanvas, houses, churchPos, cover };
 }
 
 function prism() {

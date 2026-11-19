@@ -100,7 +100,11 @@ export class Input {
   }
   onDown(e) {
     if (e.button === 0) this.left = { x: e.clientX, y: e.clientY, drag: false };
-    else if (e.button === 2) this.right = { x: e.clientX, y: e.clientY, drag: false, p0: this.pickGround(e.clientX, e.clientY), p1: null };
+    else if (e.button === 2) {
+      // second right press shortly after (and near) a right click = double-time order
+      const lr = this.lastRight, dbl = !!lr && performance.now() - lr.t < 350 && Math.hypot(e.clientX - lr.x, e.clientY - lr.y) < 28;
+      this.right = { x: e.clientX, y: e.clientY, drag: false, p0: this.pickGround(e.clientX, e.clientY), p1: null, dbl };
+    }
     else if (e.button === 1) { e.preventDefault(); this.mid = { x: e.clientX }; }
   }
   onMove(e) {
@@ -139,6 +143,8 @@ export class Input {
       }
     } else if (e.button === 2 && this.right) {
       const r = this.right; this.right = null; this.ghost.count = 0;
+      const clickOnly = !r.drag || !r.p1 || !r.p0;
+      this.lastRight = (clickOnly && !r.dbl) ? { t: performance.now(), x: e.clientX, y: e.clientY } : null;
       if (this.canOrder && this.world.selection.length) this.issueRight(e, r);
       else if (this.deploying && this.world.selection.length) this.issueDeploy(r);
     } else if (e.button === 1) this.mid = null;
@@ -153,15 +159,15 @@ export class Input {
     if (!sel.length) return;
     if (!rd.drag || !rd.p1 || !rd.p0) {
       const t = this.pickReg(e.clientX, e.clientY, 'enemy');
-      if (t) { for (const r of sel) r.cmdAttack(t); return; }
+      if (t) { for (const r of sel) r.cmdAttack(t, rd.dbl ? true : undefined); return; }
       const p = rd.p0 || this.pickGround(e.clientX, e.clientY);
       if (!p) return;
       let cx = 0, cz = 0; for (const r of sel) { cx += r.x; cz += r.z; } cx /= sel.length; cz /= sel.length;
-      if (sel.length === 1) sel[0].cmdMove(p.x, p.z, null, null, sel[0].run);
-      else for (const r of sel) r.cmdMove(p.x + (r.x - cx), p.z + (r.z - cz), null, null, r.run);
+      if (sel.length === 1) sel[0].cmdMove(p.x, p.z, null, null, rd.dbl || sel[0].run);
+      else for (const r of sel) r.cmdMove(p.x + (r.x - cx), p.z + (r.z - cz), null, null, rd.dbl || r.run);
       return;
     }
-    for (const a of this.dragPlan(sel, rd.p0, rd.p1)) a.r.cmdMove(a.x, a.z, a.f, a.files, a.r.run);
+    for (const a of this.dragPlan(sel, rd.p0, rd.p1)) a.r.cmdMove(a.x, a.z, a.f, a.files, rd.dbl || a.r.run);
   }
   // ---- deployment: units snap instantly, clamped inside the player's zone; attack orders are ignored
   zoneClamp(p) { const z = this.game.zone; return { x: Math.max(z.x0, Math.min(z.x1, p.x)), z: Math.max(z.z0, Math.min(z.z1, p.z)) }; }

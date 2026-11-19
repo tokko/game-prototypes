@@ -343,7 +343,7 @@ export class Effects {
     for (const p of this.pools) this.depth.mine.add(p.mesh);
     this._trail = new WeakMap();
 
-    this.ballMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.4 * SCALE, 8, 6), new THREE.MeshLambertMaterial({ color: 0x1c1c1c }), 64);
+    this.ballMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.1 * SCALE, 8, 6), new THREE.MeshLambertMaterial({ color: 0x1c1c1c }), 64);
     this.ballMesh.count = 0; this.ballMesh.frustumCulled = false; this.ballMesh.castShadow = true; scene.add(this.ballMesh);
 
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
@@ -424,16 +424,21 @@ export class Effects {
     this.horseCorpse.setMatrixAt(i, this._m.compose(this._p, this._q, this._s)); this.horseCorpse.instanceMatrix.needsUpdate = true;
   }
   setBalls(list) {
-    const m = this.ballMesh, t = this.w.time; m.count = 0; this._s.set(2, 2, 2);
+    const m = this.ballMesh; m.count = 0; this._s.set(1, 1, 1);
     for (const b of list) {
       if (m.count >= 64) break;
       this._m.compose(this._p.set(b.x, b.y, b.z), this._q.identity(), this._s); m.setMatrixAt(m.count++, this._m);
       const last = this._trail.get(b);
-      if (last === undefined) this._trail.set(b, t);
-      else if (t - last >= 0.04) { // thin smoke trail so the shot's flight is readable
-        this._trail.set(b, t);
-        this.puff.spawn(b.x, b.y, b.z, (R() - 0.5) * 0.6, 0.2 + R() * 0.3, (R() - 0.5) * 0.6, 2 + R() * 1.5, 0.6, 2.4 + R() * 0.8, 0.3, [0.95, 0.95, 0.93], rv());
+      if (last === undefined) { this._trail.set(b, [b.x, b.y, b.z]); continue; }
+      // thin, short smoke streak: a small fading puff every ~9 units of flight (the ball is fast, so space by distance)
+      const dx = b.x - last[0], dy = b.y - last[1], dz = b.z - last[2], d = Math.hypot(dx, dy, dz);
+      if (d < 9) continue;
+      const n = Math.min(8, Math.floor(d / 9));
+      for (let i = 1; i <= n; i++) {
+        const f = i / n;
+        this.puff.spawn(last[0] + dx * f, last[1] + dy * f, last[2] + dz * f, (R() - 0.5) * 0.4, 0.1 + R() * 0.2, (R() - 0.5) * 0.4, 0.35 + R() * 0.2, 0.3, 1.3 + R() * 0.5, 0.2, [0.95, 0.95, 0.93], rv());
       }
+      last[0] = b.x; last[1] = b.y; last[2] = b.z;
     }
     m.instanceMatrix.needsUpdate = true;
   }

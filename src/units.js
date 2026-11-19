@@ -9,8 +9,9 @@ export const SIDE_COLOR = { player: '#b32a2a', enemy: '#2c4fa0' };
 export const TYPES = {
   line: { id: 'line', name: 'Line Infantry', short: 'Line', men: 160, formation: 'grid', ranks: 4, sx: 1.15, sz: 1.7, kind: 'line',
     walk: 3.6, run: 6, turn: 1.1, range: 150, reload: 8, acc: 0.13, arc: 0.8, fireFrac: 0.67, ma: 6, md: 6, charge: 0.1, morale: 85, frag: 1.5 },
-  rifle: { id: 'rifle', name: 'Riflemen', short: 'Rifles', men: 60, formation: 'grid', ranks: 2, sx: 2.8, sz: 3.0, kind: 'rifle', loose: true,
-    walk: 4.5, run: 7.5, turn: 1.8, range: 220, reload: 10, acc: 0.2, arc: 1.2, fireFrac: 1.0, ma: 3, md: 3, charge: 0.05, morale: 70, frag: 1.6, meleeMorale: 2 },
+  // skirmishers: open order, individual aimed fire (reload is per man), seek cover / go prone, evade close infantry and cavalry
+  rifle: { id: 'rifle', name: 'Riflemen', short: 'Rifles', men: 60, formation: 'grid', ranks: 4, sx: 6, sz: 5, kind: 'rifle', loose: true,
+    walk: 4.5, run: 7.5, turn: 1.8, range: 280, reload: 22, acc: 0.45, arc: 1.2, fireFrac: 1.0, ma: 2, md: 2.5, charge: 0.05, morale: 70, frag: 1.6, meleeMorale: 2 },
   pike: { id: 'pike', name: 'Pike & Shot Tercio', short: 'Tercio', men: 260, formation: 'tercio', pikeFrac: 0.62, sx: 1.15, sz: 1.35, msx: 1.15, msz: 1.6,
     walk: 2.8, run: 4.5, turn: 0.7, range: 110, reload: 11, acc: 0.11, arc: 1.0, fireFrac: 1.0, ma: 7, md: 9, charge: 0.05, antiCav: true, morale: 90, frag: 1.2 },
   lcav: { id: 'lcav', name: 'Light Cavalry', short: 'Hussars', men: 60, formation: 'grid', ranks: 3, sx: 1.6, sz: 3.4, kind: 'lrider', cav: true, caracole: true,
@@ -50,6 +51,31 @@ export function obbOverlap(a, b, margin) {
   return { depth: best, nx, nz };
 }
 
+// ---- skirmisher cover: grid index over the terrain's read-only cover lists (trees, hedges, rocks, wall stones, house corners)
+const CV = 32, COVER_OFF = [1.1, 1.5, 1.0, 1.1, 0];   // step behind the object, away from the enemy side
+let coverIdx = null;
+function coverGrid(th) {
+  if (coverIdx) return coverIdx;
+  const g = new Map(), cv = th.cover || {};
+  const add = (x, z, k, nx = 0, nz = 0) => {
+    const key = Math.floor(x / CV) * 4096 + Math.floor(z / CV);
+    (g.get(key) || g.set(key, []).get(key)).push({ x, z, k, nx, nz, o: null });
+  };
+  for (const t of cv.trees || []) add(t.x, t.z, 0);
+  for (const h of cv.hedges || []) add(h.x, h.z, 1);
+  for (const r of cv.rocks || []) if (r.s > 0.9) add(r.x, r.z, 2);
+  for (const w of cv.walls || []) add(w.x, w.z, 3);
+  for (const h of cv.houses || []) {
+    const c = Math.cos(h.yaw), s = Math.sin(h.yaw);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const lx = sx * h.w / 2, lz = sz * h.d / 2, l = Math.hypot(lx, lz);
+      const wx = lx * c + lz * s, wz = -lx * s + lz * c;
+      add(h.x + wx + wx / l * 1.6, h.z + wz + wz / l * 1.6, 4, wx / l, wz / l);
+    }
+  }
+  return coverIdx = g;
+}
+
 export class Regiment {
   constructor(id, side, typeId, name, x, z, facing) {
     this.id = id; this.side = side; this.typeId = typeId; this.def = TYPES[typeId]; this.name = name;
@@ -63,11 +89,13 @@ export class Regiment {
     this.engaged = 0; this.contacts = []; this.prevContacts = new Set(); this.meleeAcc = 0;
     this.lastHit = -99; this.spacing = 1; this.formationMode = 'normal';
     this.guns = 0; this.dirty = true; this.group = 0;
+    this.evading = false; this.evadeT = 0; this.stillT = 0; this.coverOn = false; this.coverFace = 0; this.coverExt = null;   // skirmisher state
     this.soldiers = [];
     const np = this.def.formation === 'tercio' ? Math.round(this.maxMen * this.def.pikeFrac) : 0;
     for (let i = 0; i < this.maxMen; i++) {
       this.soldiers.push({ x: 0, z: 0, yaw: facing, role: this.def.formation === 'tercio' ? (i < np ? 'pike' : 'musk') : 'all', slot: 0,
-        phase: Math.random() * 6.28, jx: Math.random() - 0.5, jz: Math.random() - 0.5, hv: Math.floor(Math.random() * 3), mv: false });
+        phase: Math.random() * 6.28, jx: Math.random() - 0.5, jz: Math.random() - 0.5, hv: Math.floor(Math.random() * 3), mv: false,
+        cover: null, cp: null, pwant: 0, still: 0, pd: 0.4 + Math.random() * 1.8, shots: 0, fireT: 0.5 + Math.random() * 0.7 * this.def.reload, aiming: false, tgt: null, tyaw: facing });
     }
     this.files = defaultFiles(this.def, this.maxMen);
     this.updateLayout();
@@ -85,9 +113,14 @@ export class Regiment {
     if (this.def.formation === 'battery') { this.guns = Math.min(this.def.guns, Math.ceil(this.men / 4)); counts.guns = this.guns; }
     this.layout = layout(this.def, counts, this.files, this.spacing);
     this.halfW = this.layout.halfW; this.halfD = this.layout.halfD;
+    if (this.coverOn && this.coverExt) { this.halfW = Math.max(this.halfW, this.coverExt[0]); this.halfD = Math.max(this.halfD, this.coverExt[1]); }   // footprint includes the men's cover spots
     this.dirty = false;
   }
   slotWorld(s) {
+    if (this.coverOn && s.cover) return s.cover;
+    return this.slotBase(s);
+  }
+  slotBase(s) {
     const arr = this.layout[s.role];
     let lx = arr[s.slot * 2], lz = arr[s.slot * 2 + 1];
     if (lx === undefined) { lx = 0; lz = 0; }
@@ -103,6 +136,7 @@ export class Regiment {
   }
   removeSoldier(i) {
     const s = this.soldiers[i];
+    if (s.cp && s.cp.o === this) s.cp.o = null;
     this.soldiers[i] = this.soldiers[this.soldiers.length - 1]; this.soldiers.pop();
     this.men = this.soldiers.length; this.dirty = true;
     return s;
@@ -122,9 +156,55 @@ export class Regiment {
   cmdHalt() { if (this.state === 'routing') return; this.order = { type: 'idle' }; this.run = false; }
 
   // ---- movement (called every sim step)
+  // skirmishers fall back from close enemy infantry / cavalry (not other skirmishers or guns), then resume their order
+  evadeCheck(w, dt) {
+    let bd = 1e9, th = null;
+    for (const e of w.regs) {
+      if (e.side === this.side || !e.active || e.def.loose || e.def.id === 'artillery') continue;
+      const d = Math.max(0, edgeDist(e, this.x, this.z) - this.halfD * 0.5), lim = (e.def.cav ? 90 : 70) + (this.evading ? 35 : 0);
+      if (d < lim && d < bd) { bd = d; th = e; }
+    }
+    if (th) {
+      let dx = this.x - th.x, dz = this.z - th.z; const l = Math.max(1, Math.hypot(dx, dz));
+      dx = dx / l; dz = dz / l + (this.side === 'player' ? 0.6 : -0.6); const l2 = Math.hypot(dx, dz);
+      this.evadeDir = [dx / l2, dz / l2]; this.evading = true; this.evadeT = 0;
+    } else if (this.evading && (this.evadeT += dt) > 2) this.evading = false;
+  }
+  releaseCover() {
+    for (const s of this.soldiers) { if (s.cp && s.cp.o === this) s.cp.o = null; s.cp = null; s.cover = null; }
+    this.coverOn = false; this.coverExt = null; this.dirty = true;
+  }
+  // each man snaps to the nearest free cover spot (behind it, away from the enemy side) within ~30m of his slot; none nearby -> he goes prone in the open
+  assignCover(w) {
+    for (const s of this.soldiers) { if (s.cp && s.cp.o === this) s.cp.o = null; s.cp = null; s.cover = null; }
+    if (this.dirty) this.updateLayout();
+    const grid = coverGrid(w.terrain), R = 30, c = Math.cos(this.facing), sn = Math.sin(this.facing), fx = sn, fz = c;
+    const bw = this.layout.halfW + 14, bd = this.layout.halfD + 14;
+    let ew = 0, ed = 0;
+    for (const s of this.soldiers) {
+      const [sx, sz] = this.slotBase(s);
+      let best = null, bs = 1e9, bq = null;
+      for (let gx = Math.floor((sx - R) / CV); gx <= Math.floor((sx + R) / CV); gx++) for (let gz = Math.floor((sz - R) / CV); gz <= Math.floor((sz + R) / CV); gz++) {
+        const cell = grid.get(gx * 4096 + gz); if (!cell) continue;
+        for (const p of cell) {
+          if (p.o) continue;
+          const dx = p.x - sx, dz = p.z - sz, d = Math.hypot(dx, dz); if (d > R) continue;
+          const off = COVER_OFF[p.k], qx = p.x - fx * off, qz = p.z - fz * off;
+          const ox = qx - this.x, oz = qz - this.z, lx = ox * c - oz * sn, lz = ox * sn + oz * c;
+          if (Math.abs(lx) > bw || Math.abs(lz) > bd) continue;
+          const fw = dx * fx + dz * fz, sc = d + (fw < 0 ? -fw * 0.7 : 0);
+          if (sc < bs) { bs = sc; best = p; bq = [qx, qz, lx, lz]; }
+        }
+      }
+      if (best) { best.o = this; s.cp = best; s.cover = [bq[0], bq[1]]; ew = Math.max(ew, Math.abs(bq[2]) + 1); ed = Math.max(ed, Math.abs(bq[3]) + 1); }
+    }
+    this.coverOn = true; this.coverFace = this.facing; this.coverExt = [ew, ed]; this.dirty = true;
+  }
+
   update(dt, w) {
-    if (this.state === 'gone') return;
+    if (this.state === 'gone') { if (this.coverOn) this.releaseCover(); return; }
     const def = this.def;
+    if (def.loose) { if (this.state !== 'routing') this.evadeCheck(w, dt); else this.evading = false; }
     let dest = null, maxSp = 0, wantFace = null, stopAt = 0.8, crab = false;
     if (this.state === 'routing') {
       const ez = this.side === 'player' ? HALF - 4 : -HALF + 4;
@@ -155,6 +235,7 @@ export class Regiment {
         else wantFace = Math.atan2(t.x - this.x, t.z - this.z);
       }
     }
+    if (this.evading && this.state !== 'routing') { dest = [this.x + this.evadeDir[0] * 60, this.z + this.evadeDir[1] * 60]; maxSp = def.run; stopAt = 1; wantFace = null; crab = false; }
     // artillery: limber / deploy
     let blocked = false;
     if (def.id === 'artillery') {
@@ -190,6 +271,10 @@ export class Regiment {
     }
     if (this.state !== 'routing') { this.x = clamp(this.x, -HALF + 6, HALF - 6); this.z = clamp(this.z, -HALF + 6, HALF - 6); }
     this.moving = this.speedNow > 0.4;
+    if (def.loose) {   // cover: settle in after standing still for a moment; give it up as soon as the unit moves
+      if (this.moving || this.evading || this.order.type === 'move' || this.state === 'routing') { this.stillT = 0; if (this.coverOn) this.releaseCover(); }
+      else if ((this.stillT += dt) > 1.2 && (!this.coverOn || Math.abs(wrapAngle(this.facing - this.coverFace)) > 0.6) && this.layout) this.assignCover(w);
+    }
     if (this.state === 'routing' && Math.abs(this.z) > HALF - 8 && (this.side === 'player') === (this.z > 0)) { this.state = 'gone'; this.fled = true; }
   }
 
@@ -205,8 +290,13 @@ export class Regiment {
         s.x += dx / d * step; s.z += dz / d * step;
       }
       s.mv = d > 0.5 || (this.moving && !s.hold);
-      const want = (d > 1.5 || routing) ? Math.atan2(dx, dz) : this.facing;
+      const loose = this.def.loose;
+      const want = (d > 1.5 || routing) ? Math.atan2(dx, dz) : loose && s.aiming ? s.tyaw : this.facing;
       s.yaw += wrapAngle(want - s.yaw) * Math.min(1, dt * 8);
+      if (loose) {   // pose target: stand while moving; kneel behind cover or lie prone in the open once settled
+        s.still = s.mv || routing || this.evading ? 0 : s.still + dt;
+        s.pwant = s.still > s.pd ? (s.cover ? 1 : 2) : 0;
+      }
     }
   }
 }
@@ -231,12 +321,14 @@ export class UnitRenderer {
       const n = Math.max(1, cap[key.replace('@lo', '')] || 1), g = geo.clone();
       const ia = new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4); ia.setUsage(THREE.DynamicDrawUsage);
       g.setAttribute('iAnim', ia);
+      const ip = new THREE.InstancedBufferAttribute(new Float32Array(n), 1); ip.setUsage(THREE.DynamicDrawUsage);   // body pose: 0 stand, 1 kneel, 2 prone
+      g.setAttribute('iPose', ip);
       const m = new THREE.InstancedMesh(g, models.mats[mk].mat, n);
       m.customDepthMaterial = models.mats[mk].depth;
       m.count = 0; m.frustumCulled = false; m.castShadow = true; m.receiveShadow = false;
       m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(n * 3).fill(1), 3);
-      m.iAnim = ia;
+      m.iAnim = ia; m.iPose = ip;
       this.meshes[key] = m; scene.add(m);
     };
     const matKind = (k) => /rider|officer/.test(k) ? 'rider' : 'infantry';
@@ -257,10 +349,10 @@ export class UnitRenderer {
     for (const g of [r.ring, r.targetRing, r.destRing]) this.ringGroup.add(g.mesh);
   }
   // a0..a3 -> iAnim: walk cycle (rad), gait (speed / walk speed), aim/charge pose 0..1, recoil 0..1
-  put(key, x, y, z, yaw, s, v = 1, a0 = 0, a1 = 0, a2 = 0, a3 = 0) {
+  put(key, x, y, z, yaw, s, v = 1, a0 = 0, a1 = 0, a2 = 0, a3 = 0, pose = 0) {
     const m = this.meshes[key]; const i = m.count;
     if (i >= m.instanceMatrix.count) return;
-    const ia = m.iAnim.array, q = i * 4; ia[q] = a0; ia[q + 1] = a1; ia[q + 2] = a2; ia[q + 3] = a3;
+    const ia = m.iAnim.array, q = i * 4; ia[q] = a0; ia[q + 1] = a1; ia[q + 2] = a2; ia[q + 3] = a3; m.iPose.array[i] = pose;
     const a = m.instanceMatrix.array, o = i * 16, c = Math.cos(yaw) * s, sn = Math.sin(yaw) * s;
     a[o] = c; a[o + 1] = 0; a[o + 2] = -sn; a[o + 3] = 0;
     a[o + 4] = 0; a[o + 5] = s; a[o + 6] = 0; a[o + 7] = 0;
@@ -297,17 +389,27 @@ export class UnitRenderer {
         if (cav) aim = melee ? 1 : 0;
         else if (kind === 'pike') aim = pikeDown ? 1 : 0;
         else if (kind !== 'crew' && !routing) {
-          const stag = (s.phase % 1) * 0.9, tf = since - stag;   // shots ripple along the line
-          aim = ready || since < stag + 0.7 ? 1 : 0;
-          if (tf >= 0 && tf < 0.45) rec = 1 - tf / 0.45;
+          if (d.loose) {   // skirmishers shoot on their own timers: aim while lining up a shot, recoil per shot
+            if (s._sh === undefined) s._sh = s.shots;
+            if (s.shots !== s._sh) { s._sh = s.shots; s._sf = time; }
+            const tf = s._sf === undefined ? 99 : time - s._sf;
+            aim = s.aiming || tf < 0.9 ? 1 : 0;
+            if (tf >= 0 && tf < 0.45) rec = 1 - tf / 0.45;
+          } else {
+            const stag = (s.phase % 1) * 0.9, tf = since - stag;   // shots ripple along the line
+            aim = ready || since < stag + 0.7 ? 1 : 0;
+            if (tf >= 0 && tf < 0.45) rec = 1 - tf / 0.45;
+          }
         }
         s._a = s._a === undefined ? aim : s._a + (aim - s._a) * kA;
+        let pose = 0;
+        if (d.loose) { s._p = s._p === undefined ? s.pwant : s._p + (s.pwant - s._p) * Math.min(1, dt * 3); pose = s._p; }
         const y = th.heightAt(s.x, s.z);
         const ex = s.x - cx, ey = y - cy, ez = s.z - cz, lo = ex * ex + ey * ey + ez * ez > LOD2 ? '@lo' : '';
         const v = 0.86 + (s.phase % 1) * 0.28;   // per-figure tone variation
         const key = (tercio ? (kind === 'pike' ? kPike : kMusk) : kMain) + lo;
         if (cav) this.put(`horse${s.hv}${lo}`, s.x, y, s.z, s.yaw, SCALE, v, s._c, s._g, s._a, 0);
-        this.put(key, s.x, y, s.z, s.yaw, SCALE, v, s._c, s._g, s._a, rec);
+        this.put(key, s.x, y, s.z, s.yaw, SCALE, v, s._c, s._g, s._a, rec, pose);
       }
       if (d.formation === 'battery') {
         const c = Math.cos(r.facing), sn = Math.sin(r.facing), g = r.layout.guns;
@@ -334,7 +436,7 @@ export class UnitRenderer {
     const upd = (a, n, c) => { a.clearUpdateRanges(); a.addUpdateRange(0, c * n); a.needsUpdate = true; };
     for (const k in this.meshes) {
       const m = this.meshes[k]; m.visible = m.count > 0;
-      if (m.count) { upd(m.instanceMatrix, 16, m.count); upd(m.instanceColor, 3, m.count); upd(m.iAnim, 4, m.count); }
+      if (m.count) { upd(m.instanceMatrix, 16, m.count); upd(m.instanceColor, 3, m.count); upd(m.iAnim, 4, m.count); upd(m.iPose, 1, m.count); }
     }
 
     // banners & rings
