@@ -16,7 +16,19 @@ export class RTSCamera {
     return 0.40 + 0.647 * Math.pow(this.kFor(d), 0.6);   // 23 deg close (dist 40; stays above foliage), ~39 deg at dist 180, 60 deg at max zoom-out (600)
   }
   get pitch() { return this.pitchFor(this.s.dist); }
-  focusOn(x, z) { this.t.fx = x; this.t.fz = z; this.t.dist = Math.max(this.t.dist, 90); this.clamp(); }   // keep zoom, but never closer than 90
+  // upward view tilt applied in apply(): puts the horizon near the top; fades out toward top-down zoom
+  tiltFor(d) {
+    const k = this.kFor(d), u = Math.min(1, Math.max(0, (k - 0.3) / 0.7)), fade = 1 - u * u * (3 - 2 * u);
+    return Math.max(0, this.pitchFor(d) - 0.32) * fade;
+  }
+  // keep zoom (never closer than 90); the tilt pushes the look-at point toward the bottom edge, so shift the
+  // focus toward the camera until (x, z) sits just below screen centre, clear of the HUD
+  focusOn(x, z) {
+    const d = this.t.dist = Math.max(this.t.dist, 90);
+    const p = this.pitchFor(d), a = Math.max(0.12, p - this.tiltFor(d) + 0.05);
+    const off = Math.max(0, Math.sin(p) * d / Math.tan(a) - Math.cos(p) * d);
+    this.t.fx = x + Math.sin(this.t.yaw) * off; this.t.fz = z + Math.cos(this.t.yaw) * off; this.clamp();
+  }
   // optional (px, pz): world point under the cursor; focus shifts proportionally so it stays put as the zoom changes
   zoom(delta, px, pz) {
     const old = this.t.dist;
@@ -58,8 +70,7 @@ export class RTSCamera {
     this.cam.position.set(x, y, z);
     this.cam.lookAt(fx, fy, fz);
     // tilt the view up so the horizon sits near the top of the screen (fov 46: half 0.40 rad); fades out toward top-down zoom
-    const k = this.kFor(dist), u = Math.min(1, Math.max(0, (k - 0.3) / 0.7)), fade = 1 - u * u * (3 - 2 * u);
-    this.cam.rotateX(Math.max(0, p - 0.32) * fade);
+    this.cam.rotateX(this.tiltFor(dist));
     this.cam.updateMatrixWorld();
   }
   // scripted placement (intro)
