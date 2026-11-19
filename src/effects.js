@@ -9,7 +9,7 @@ import { HORIZON } from './scene.js';
 const R = Math.random;
 const ATLAS = 4;                                   // 4x4 grid of smoke variants
 
-// ---- cauliflower smoke atlas: lobed metaball density + domain-warped fbm.
+// ---- smoke atlas: broad gaussian haze blobs + low-frequency noise erosion.
 // R,G = fake surface normal xy (from the height field), B = core thickness, A = density
 function hash2(x, y, s) {
   let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(s, 1442695041)) | 0;
@@ -29,34 +29,30 @@ function makeSmokeAtlas() {
   const S = 160, W = S * ATLAS, data = new Uint8Array(W * W * 4), h = new Float32Array(S * S), al = new Float32Array(S * S);
   for (let c = 0; c < ATLAS * ATLAS; c++) {
     const seed = c * 17 + 3, blobs = [];
-    const nb = 13 + Math.floor(R() * 7);
-    for (let i = 0; i < nb; i++) { // big lobes
-      const a = R() * 6.283, d = Math.sqrt(R()) * 0.24;
-      blobs.push([Math.cos(a) * d, Math.sin(a) * d * 0.9, 0.11 + R() * 0.10, 0.7 + R() * 0.5]);
-    }
-    for (let i = 0; i < 12; i++) { // small rim bumps -> cauliflower edge
-      const a = R() * 6.283, d = 0.17 + R() * 0.15;
-      blobs.push([Math.cos(a) * d, Math.sin(a) * d * 0.9, 0.05 + R() * 0.05, 0.5 + R() * 0.4]);
+    const nb = 7 + Math.floor(R() * 4);
+    for (let i = 0; i < nb; i++) { // few broad soft blobs, no small rim bumps -> diffuse haze silhouette
+      const a = R() * 6.283, d = Math.sqrt(R()) * 0.2;
+      blobs.push([Math.cos(a) * d, Math.sin(a) * d * 0.9, 0.10 + R() * 0.10, 0.6 + R() * 0.5]);
     }
     for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
       const u = (px + 0.5) / S - 0.5, v = (py + 0.5) / S - 0.5;
-      const wu = u + (fbm(u * 4 + 5, v * 4, seed) - 0.5) * 0.10, wv = v + (fbm(u * 4, v * 4 + 9, seed + 1) - 0.5) * 0.10;
+      const wu = u + (vnoise(u * 2.5 + 5, v * 2.5, seed) - 0.5) * 0.16, wv = v + (vnoise(u * 2.5, v * 2.5 + 9, seed + 1) - 0.5) * 0.16;
       let d = 0;
       for (let i = 0; i < blobs.length; i++) {
-        const b = blobs[i], dx = wu - b[0], dy = wv - b[1], t2 = (dx * dx + dy * dy) / (b[2] * b[2]);
-        if (t2 < 1) { const f = 1 - t2; d += b[3] * f * f; }
+        const bl = blobs[i], dx = wu - bl[0], dy = wv - bl[1];
+        d += bl[3] * Math.exp(-(dx * dx + dy * dy) / (bl[2] * bl[2] * 0.55));   // gaussian falloff
       }
-      d *= 0.65 + 0.7 * fbm(u * 11 + 3, v * 11 + 3, seed + 2);
+      d *= 0.45 + 0.9 * (vnoise(u * 3.2 + 3, v * 3.2 + 3, seed + 2) * 0.65 + vnoise(u * 6.4, v * 6.4, seed + 5) * 0.35);   // low-frequency erosion
       const rad = Math.hypot(u, v), k = py * S + px;
       h[k] = d;
-      al[k] = sstep(0.15, 0.80, d) * (1 - sstep(0.28, 0.47, rad));
+      al[k] = sstep(0.04, 1.1, d) * (1 - sstep(0.16, 0.48, rad));
     }
     const ox = (c % ATLAS) * S, oy = Math.floor(c / ATLAS) * S;
     for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
       const k = py * S + px;
       const gx = h[py * S + Math.min(S - 1, px + 3)] - h[py * S + Math.max(0, px - 3)];   // +u = right
       const gy = h[Math.min(S - 1, py + 3) * S + px] - h[Math.max(0, py - 3) * S + px];   // +v = up on the quad
-      const nx = Math.max(-1, Math.min(1, -gx * 1.5)), ny = Math.max(-1, Math.min(1, -gy * 1.5));
+      const nx = Math.max(-1, Math.min(1, -gx * 0.9)), ny = Math.max(-1, Math.min(1, -gy * 0.9));
       const o = ((oy + py) * W + ox + px) * 4;
       data[o] = (nx * 0.5 + 0.5) * 255;
       data[o + 1] = (ny * 0.5 + 0.5) * 255;
@@ -80,6 +76,7 @@ function makeFlashTexture() {
 const VERT = `
 attribute vec3 iPos; attribute vec3 iVel; attribute vec4 iT; attribute vec4 iM; attribute vec3 iCol;
 uniform float uTime; uniform vec3 uWind; uniform float uDrag; uniform float uFadeIn; uniform float uFadeOut; uniform float uAtlas;
+uniform float uNearD; uniform float uFlat; uniform float uAmax;
 uniform float uLift; uniform float uWob; uniform float uGrav; uniform float uGrow; uniform float uShear; uniform vec3 uSunDir;
 varying vec2 vLoc; varying vec2 vCell; varying vec2 vN; varying vec2 vRot; varying float vA; varying float vAge; varying float vDepth; varying float vSize;
 varying vec3 vCol; varying vec3 vSunV; varying vec3 vUpV; varying vec3 vVP; varying float vSeed;
@@ -101,12 +98,20 @@ void main(){
   vec2 q = position.xy; float cs = cos(rot), sn = sin(rot);
   vN = q * 2.0; vRot = vec2(cs, sn);
   q = vec2(cs*q.x - sn*q.y, sn*q.x + cs*q.y);
+  // ground-hugging wall: squash along the screen-projected world up (relaxes with age and when viewed from above)
+  vec2 upS = (viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xy; float upL = length(upS);
+  float fl = mix(uFlat, 1.0, a * 0.7); fl = mix(1.0, fl, smoothstep(0.1, 0.55, upL));
+  upS = upL > 1e-3 ? upS / upL : vec2(0.0, 1.0);
+  q -= upS * dot(q, upS) * (1.0 - fl);
   mv.xy += q * size;
   gl_Position = projectionMatrix * mv;
   vCell = vec2(mod(iM.y, uAtlas), floor(iM.y / uAtlas));
   vLoc = uv;
   float nearF = smoothstep(2.0 + size * 0.4, 10.0 + size * 1.1, -mv.z);
-  vA = iM.z * smoothstep(0.0, uFadeIn, a) * (1.0 - smoothstep(uFadeOut, 1.0, a)) * nearF;
+  if (uNearD > 0.0) nearF *= mix(0.04, 1.0, smoothstep(uNearD, uNearD * 2.4, -mv.z));   // never a wall of white up close
+  float big = uAmax > 0.0 ? mix(1.0, 0.4, smoothstep(5.0, 26.0, size)) * mix(1.0, 0.45, smoothstep(0.0, 0.6, a)) : 1.0;   // large/old puffs thin out
+  vA = iM.z * big * smoothstep(0.0, uFadeIn, a) * (1.0 - smoothstep(uFadeOut, 1.0, a)) * nearF;
+  if (uAmax > 0.0) vA = min(vA, uAmax);
   vCol = iCol; vDepth = -mv.z; vAge = a; vSize = size; vVP = mv.xyz; vSeed = fract(iM.x * 91.7);
   vSunV = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
   vUpV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
@@ -165,7 +170,10 @@ void main(){
     float edge = 1.0 - t.b;
     vec3 scat = uSunCol * fs * (0.28 + 0.6 * edge + 0.5 * edge * edge);
     vec3 albedo = vCol * (0.93 + 0.1 * vSeed);
-    c = albedo * ((uSunCol * sunTerm * sunVis + amb) * ao + scat);
+    vec3 shadeTint = vec3(1.0, 0.97, 0.93);
+    c = albedo * ((uSunCol * sunTerm * sunVis * 0.62 + amb * shadeTint * 0.9) * ao + scat * 0.5);
+    float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    c = mix(vec3(lum), c, 0.8) * 0.88;
     c *= mix(1.0, 0.9, vAge);
   } else {
     c = t.rgb * vCol * uGain;
@@ -188,7 +196,7 @@ const makeShared = (scene) => ({
 });
 
 class Particles {
-  constructor(scene, world, shared, owner, { capacity, texture, additive, atlas = 1, drag = 0.5, fadeIn = 0.08, fadeOut = 0.5, wind = null, light = true, lift = 0, wob = 0, grav = 0, grow = 4, shear = 0, thick = 0.5, erode = 0, gain = 1, reject = 0, every = 3, order = 8 }) {
+  constructor(scene, world, shared, owner, { capacity, texture, additive, atlas = 1, drag = 0.5, fadeIn = 0.08, fadeOut = 0.5, wind = null, light = true, lift = 0, wob = 0, grav = 0, grow = 4, shear = 0, thick = 0.5, erode = 0, gain = 1, nearD = 0, flat = 1, amax = 0, reject = 0, every = 3, order = 8 }) {
     this.w = world; this.cap = capacity; this.reject = reject; this.every = every; this.drag = drag; this.live = 0; this.fresh = 0; this.lastSync = -99; this.owner = owner;
     this.windV = wind ? new THREE.Vector3(...wind) : shared.uWind.value;
     const base = new THREE.PlaneGeometry(1, 1);
@@ -210,7 +218,7 @@ class Particles {
       uniforms: {
         uMap: { value: texture }, uTime: { value: 0 }, uWind: wind ? { value: this.windV } : shared.uWind, uDrag: { value: drag }, uFadeIn: { value: fadeIn }, uFadeOut: { value: fadeOut }, uAtlas: { value: atlas },
         uLift: { value: lift }, uWob: { value: wob }, uGrav: { value: grav }, uGrow: { value: grow }, uShear: { value: shear }, uThick: { value: thick }, uErode: { value: erode }, uGain: { value: gain },
-        uLight: { value: light ? 1 : 0 }, uAmb: { value: 1.9 },
+        uLight: { value: light ? 1 : 0 }, uAmb: { value: 1.9 }, uNearD: { value: nearD }, uFlat: { value: flat }, uAmax: { value: amax },
         uSunDir: shared.uSunDir, uSunCol: shared.uSunCol, uSky: shared.uSky, uFog: shared.uFog, uFogNear: shared.uFogNear, uFogFar: shared.uFogFar,
         uDepth: shared.uDepth, uView: shared.uView, uNear: shared.uNear, uFar: shared.uFar, uDepthOn: shared.uDepthOn,
       },
@@ -314,8 +322,8 @@ class SceneDepth {
 }
 
 const rv = () => Math.floor(R() * ATLAS * ATLAS);
-const WHITE = [1, 0.98, 0.94];
-const GREY = [0.97, 0.96, 0.94];
+const WHITE = [0.9, 0.89, 0.86];
+const GREY = [0.82, 0.81, 0.79];
 const LUM = new THREE.Vector3(0.2126, 0.7152, 0.0722);
 
 export class Effects {
@@ -325,8 +333,8 @@ export class Effects {
     const sh = this.sh = makeShared(scene);
     const P = (o) => new Particles(scene, world, sh, this, { texture: atlas, atlas: ATLAS, ...o });
     // long-lived banks: slow growth, slow thinning, wind shear; reject so clouds never pop out early
-    this.smoke = P({ capacity: 3500, drag: 0.35, fadeIn: 0.05, fadeOut: 0.55, lift: 0.32, wob: 0.05, grow: 2.2, shear: 0.5, thick: 0.5, erode: 0.55, reject: 0.3, every: 3, order: 8 });
-    this.puff = P({ capacity: 1500, drag: 0.6, fadeIn: 0.06, fadeOut: 0.45, lift: 0.25, wob: 0.05, grow: 3, shear: 0.3, thick: 0.4, erode: 0.4, reject: 0.45, every: 3, order: 8 });
+    this.smoke = P({ capacity: 3500, drag: 0.35, fadeIn: 0.05, fadeOut: 0.45, lift: 0.12, wob: 0.05, grow: 2.2, shear: 0.5, thick: 0.5, erode: 0.7, nearD: 25, flat: 0.45, amax: 0.42, reject: 0.3, every: 3, order: 8 });
+    this.puff = P({ capacity: 1500, drag: 0.6, fadeIn: 0.06, fadeOut: 0.4, lift: 0.18, wob: 0.05, grow: 3, shear: 0.3, thick: 0.4, erode: 0.5, nearD: 18, flat: 0.7, amax: 0.35, reject: 0.45, every: 3, order: 8 });
     this.dust = P({ capacity: 1000, drag: 1.2, fadeIn: 0.08, fadeOut: 0.4, lift: 0.2, wob: 0.03, thick: 0.35, erode: 0.3, every: 2, order: 7 });
     this.dirt = P({ capacity: 800, drag: 0.4, fadeIn: 0.03, fadeOut: 0.6, grav: 16, wind: [0.3, 0, 0.1], thick: 0.2, every: 2, order: 7 });
     this.flash = P({ capacity: 600, texture: makeFlashTexture(), additive: true, light: false, drag: 1, fadeIn: 0.05, fadeOut: 0.2, wind: [0, 0, 0], thick: 0.1, gain: 2.4, every: 1, order: 9 });
@@ -378,18 +386,18 @@ export class Effects {
     this.flash.spawn(x + dx * 0.4, y, z + dz * 0.4, 0, 0, 0, 0.11, 1.6 * big, 4.2 * big, 1, [1, 0.82, 0.5]);
     if (R() > 0.5 * Math.min(1, Math.max(0.05, (1 - this.load) * 1.6))) return;
     const sp = 1.5 + R() * 2, lf = 0.75 + 0.25 * big;
-    const ok = this.smoke.spawn(x + dx * 0.9, y, z + dz * 0.9, dx * sp + (R() - 0.5) * 0.8, 0.3 + R() * 0.5, dz * sp + (R() - 0.5) * 0.8, (16 + R() * 12) * lf, 3.5 * big, (18 + R() * 10) * big, 0.55 + R() * 0.15, WHITE, rv());
-    if (ok && R() < 0.25) this.smoke.spawn(x + dx * 2, y + 0.4, z + dz * 2, dx * sp * 1.8 + (R() - 0.5), 0.5, dz * sp * 1.8 + (R() - 0.5), (13 + R() * 8) * lf, 2.5 * big, (12 + R() * 6) * big, 0.45, GREY, rv(), 0.3);
+    const ok = this.smoke.spawn(x + dx * 0.9, y, z + dz * 0.9, dx * sp + (R() - 0.5) * 0.8, 0.3 + R() * 0.5, dz * sp + (R() - 0.5) * 0.8, (16 + R() * 12) * lf, 3.5 * big, (18 + R() * 10) * big, 0.32 + R() * 0.1, WHITE, rv());
+    if (ok && R() < 0.25) this.smoke.spawn(x + dx * 2, y + 0.4, z + dz * 2, dx * sp * 1.8 + (R() - 0.5), 0.5, dz * sp * 1.8 + (R() - 0.5), (13 + R() * 8) * lf, 2.5 * big, (12 + R() * 6) * big, 0.26, GREY, rv(), 0.3);
   }
   cannon(x, y, z, dx, dz) {
     this.flash.spawn(x + dx * 1.5, y, z + dz * 1.5, 0, 0, 0, 0.2, 4, 15, 1, [1, 0.78, 0.42]);
     this.flash.spawn(x + dx * 3, y + 0.2, z + dz * 3, dx * 6, 0, dz * 6, 0.14, 2, 8, 0.9, [1, 0.9, 0.6]);
     for (let i = 0; i < 5; i++) { // blast rolling out along the barrel line
       const sp = 5 + R() * 6;
-      this.smoke.spawn(x + dx * (1 + i * 0.8) + (R() - 0.5) * 2, y + R() * 0.8, z + dz * (1 + i * 0.8) + (R() - 0.5) * 2, dx * sp + (R() - 0.5) * 3, 0.6 + R() * 1.0, dz * sp + (R() - 0.5) * 3, 18 + R() * 12, 5 + R() * 3, 26 + R() * 14, 0.68 + R() * 0.12, WHITE, rv(), i * 0.05);
+      this.smoke.spawn(x + dx * (1 + i * 0.8) + (R() - 0.5) * 2, y + R() * 0.8, z + dz * (1 + i * 0.8) + (R() - 0.5) * 2, dx * sp + (R() - 0.5) * 3, 0.6 + R() * 1.0, dz * sp + (R() - 0.5) * 3, 18 + R() * 12, 5 + R() * 3, 26 + R() * 14, 0.46 + R() * 0.08, WHITE, rv(), i * 0.05);
     }
     for (let i = 0; i < 7; i++) { // billowing column: staggered puffs that climb and swell
-      this.smoke.spawn(x + dx * (1.5 + R() * 2) + (R() - 0.5) * 2.5, y + i * 0.9 + R(), z + dz * (1.5 + R() * 2) + (R() - 0.5) * 2.5, (R() - 0.5) * 2 + dx * 1.5, 1.2 + R() * 2.4, (R() - 0.5) * 2 + dz * 1.5, 20 + R() * 10, 4 + R() * 3, 22 + R() * 14 + i * 1.5, 0.66 + R() * 0.14, i < 3 ? WHITE : GREY, rv(), 0.15 + i * 0.22);
+      this.smoke.spawn(x + dx * (1.5 + R() * 2) + (R() - 0.5) * 2.5, y + i * 0.9 + R(), z + dz * (1.5 + R() * 2) + (R() - 0.5) * 2.5, (R() - 0.5) * 2 + dx * 1.5, 1.2 + R() * 2.4, (R() - 0.5) * 2 + dz * 1.5, 20 + R() * 10, 4 + R() * 3, 22 + R() * 14 + i * 1.5, 0.42 + R() * 0.08, i < 3 ? WHITE : GREY, rv(), 0.15 + i * 0.22);
     }
     for (let i = 0; i < 4; i++) { // blast scours dust off the ground in front of the muzzle
       const a = (R() - 0.5) * 2.4, c = Math.cos(a), s = Math.sin(a), sp = 6 + R() * 6;

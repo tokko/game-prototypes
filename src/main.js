@@ -46,18 +46,23 @@ window.addEventListener('mousedown', () => game.skipIntro());
 const ZONE = { x0: -340, x1: 340, z0: 215, z1: 420 };
 const ENEMY_ZONE = { x0: -340, x1: 340, z0: -265, z1: -30 };
 let zoneGroup = null;
+const DEPLOY_VIEW = { fz: 450, dist: 250 };   // default deployment/battle-start camera (frames the whole player line above the HUD)
 // translucent rectangle draped over the terrain heights, plus a brighter edge strip
+// fill alpha fades from fillOp at the zone edge down to 50% of it toward the centre (vertex alpha)
 function makeZone(zn, color, fillOp, edgeColor, edgeOp) {
   const STEP = 8, LIFT = 0.8, T = 3.6, h = (x, z) => terrain.heightAt(x, z);
-  const nx = Math.ceil((zn.x1 - zn.x0) / STEP), nz = Math.ceil((zn.z1 - zn.z0) / STEP), pos = [], idx = [];
+  const nx = Math.ceil((zn.x1 - zn.x0) / STEP), nz = Math.ceil((zn.z1 - zn.z0) / STEP), pos = [], idx = [], col = [];
   for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) {
     const x = zn.x0 + (zn.x1 - zn.x0) * i / nx, z = zn.z0 + (zn.z1 - zn.z0) * j / nz;
     pos.push(x, h(x, z) + LIFT, z);
+    const e = Math.max(0, 1 - Math.min(x - zn.x0, zn.x1 - x, z - zn.z0, zn.z1 - z) / 70);
+    col.push(1, 1, 1, fillOp * (0.5 + 0.5 * e));
   }
   for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { const a = j * (nx + 1) + i, b = a + 1, c = a + nx + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
-  const mk = (p, ix, op, col, order, offset) => {
+  const mk = (p, ix, op, color, order, offset, vc) => {
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3)); g.setIndex(ix);
-    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: op, depthWrite: false, side: THREE.DoubleSide, fog: false, polygonOffset: true, polygonOffsetFactor: offset, polygonOffsetUnits: offset }));
+    if (vc) g.setAttribute('color', new THREE.Float32BufferAttribute(vc, 4));
+    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color, vertexColors: !!vc, transparent: true, opacity: op, depthWrite: false, side: THREE.DoubleSide, fog: false, polygonOffset: true, polygonOffsetFactor: offset, polygonOffsetUnits: offset }));
     m.frustumCulled = false; m.renderOrder = order; return m;
   };
   const ep = [], ei = [];
@@ -71,7 +76,7 @@ function makeZone(zn, color, fillOp, edgeColor, edgeOp) {
   };
   strip(zn.x0, zn.z0, zn.x1, zn.z0, 0, 1); strip(zn.x0, zn.z1, zn.x1, zn.z1, 0, -1);
   strip(zn.x0, zn.z0, zn.x0, zn.z1, 1, 0); strip(zn.x1, zn.z0, zn.x1, zn.z1, -1, 0);
-  const grp = new THREE.Group(); grp.add(mk(pos, idx, fillOp, color, 3, -2), mk(ep, ei, edgeOp, edgeColor, 4, -3));
+  const grp = new THREE.Group(); grp.add(mk(pos, idx, 1, color, 3, -2, col), mk(ep, ei, edgeOp, edgeColor, 4, -3));
   return grp;
 }
 function clearZone() {
@@ -82,15 +87,15 @@ function clearZone() {
 }
 game.startDeployment = () => {
   game.phase = 'deployment'; rts.free = true;
-  rts.set(0, 335, 0, 160);
+  rts.set(0, DEPLOY_VIEW.fz, 0, DEPLOY_VIEW.dist);
   zoneGroup = new THREE.Group();
-  zoneGroup.add(makeZone(ZONE, 0xe03820, 0.3, 0xffe080, 1), makeZone(ENEMY_ZONE, 0x3050c0, 0.07, 0x6a88ff, 0.35));
+  zoneGroup.add(makeZone(ZONE, 0xdcc890, 0.15, 0xffe080, 1), makeZone(ENEMY_ZONE, 0xb0c4f0, 0.06, 0x9ab4ff, 0.35));
   scene.add(zoneGroup); game.zone = ZONE;
   ui.banner('', 0);
 };
 game.startBattle = () => {
   if (game.phase === 'battle' || game.phase === 'ended') return;
-  if (game.phase !== 'deployment') rts.set(0, 335, 0, 160); // keep the player's own camera when coming from deployment
+  if (game.phase !== 'deployment') rts.set(0, DEPLOY_VIEW.fz, 0, DEPLOY_VIEW.dist); // keep the player's own camera when coming from deployment
   clearZone();
   game.phase = 'battle'; rts.free = true;
   ui.banner('The battle begins', 3000);
@@ -98,7 +103,7 @@ game.startBattle = () => {
 function introUpdate(dt) {
   game.introT += dt;
   const k = Math.min(1, game.introT / INTRO_LEN), e = k * k * (3 - 2 * k);
-  rts.set(-80 + 80 * e, -120 + 455 * e, 1.1 * (1 - e), 600 - 440 * e);
+  rts.set(-80 + 80 * e, -120 + (DEPLOY_VIEW.fz + 120) * e, 1.1 * (1 - e), 600 + (DEPLOY_VIEW.dist - 600) * e);
   if (k >= 1) game.startDeployment();
 }
 

@@ -462,7 +462,7 @@ const NAMES = {
   player: { line: ['Crown Guards', 'Redmere Fusiliers', 'Ashford Foot', 'Lionheart Regiment', 'Harrow Grenadiers'], rifle: ['Fenwick Rifles', 'Greenhill Skirmishers'], pike: ['Old Standard Tercio'], lcav: ['Marlow Hussars'], hcav: ['Royal Lancers'], artillery: ['1st Field Battery', '2nd Field Battery'] },
   enemy: { line: ['Valden Musketeers', 'Corvane Line', 'Ostrel Foot', 'Blue Marsh Regiment', 'Iron Crest Grenadiers'], rifle: ['Dunmoor Jaegers', 'Kestrel Skirmishers'], pike: ['Tercio of Saint Orric'], lcav: ['Corvane Dragoons'], hcav: ['Imperial Lancers'], artillery: ['Reserve Battery', 'Hill Battery'] },
 };
-const PLAYER = [['line', -170, 300], ['line', -85, 300], ['line', 0, 300], ['line', 85, 300], ['line', 170, 300], ['pike', 0, 355], ['rifle', -120, 250], ['rifle', 120, 250], ['lcav', -300, 330], ['hcav', 300, 340], ['artillery', -230, 285], ['artillery', 235, 295]];
+const PLAYER = [['line', -150, 300], ['line', -75, 300], ['line', 0, 300], ['line', 75, 300], ['line', 150, 300], ['pike', 0, 335], ['rifle', -100, 255], ['rifle', 100, 255], ['lcav', -240, 305], ['hcav', 240, 310], ['artillery', -205, 285], ['artillery', 205, 290]];
 const ENEMY = [['line', -195, -110], ['line', -125, -110], ['line', 125, -110], ['line', 195, -110], ['line', 0, -195], ['pike', 0, -112], ['rifle', -90, -50], ['rifle', 90, -50], ['lcav', -290, -120], ['hcav', 290, -130], ['artillery', -95, -150], ['artillery', 95, -150]];
 
 export function createArmies(world) {
@@ -475,5 +475,5 @@ export function createArmies(world) {
       world.regs.push(new Regiment(id++, side, t, name, x, z, side === 'player' ? Math.PI : 0));
     }
   }
-  world.generals.push(new General('player', 0, 400), new General('enemy', 0, -260));
+  world.generals.push(new General('player', 70, 350), new General('enemy', 0, -260));
 }

@@ -13,11 +13,19 @@ export class RTSCamera {
   }
   kFor(d) { return Math.min(1, Math.max(0, (d - this.minDist) / (this.maxDist - this.minDist))); }
   pitchFor(d) {
-    return 0.314 + 0.733 * Math.pow(this.kFor(d), 0.6);   // 18 deg close (dist 40), ~36 deg at dist 180, 60 deg at max zoom-out (600)
+    return 0.40 + 0.647 * Math.pow(this.kFor(d), 0.6);   // 23 deg close (dist 40; stays above foliage), ~39 deg at dist 180, 60 deg at max zoom-out (600)
   }
   get pitch() { return this.pitchFor(this.s.dist); }
-  focusOn(x, z) { this.t.fx = x; this.t.fz = z; this.clamp(); }
-  zoom(delta) { this.t.dist = Math.min(this.maxDist, Math.max(this.minDist, this.t.dist * Math.exp(delta * 0.0012))); }
+  focusOn(x, z) { this.t.fx = x; this.t.fz = z; this.t.dist = Math.max(this.t.dist, 90); this.clamp(); }   // keep zoom, but never closer than 90
+  // optional (px, pz): world point under the cursor; focus shifts proportionally so it stays put as the zoom changes
+  zoom(delta, px, pz) {
+    const old = this.t.dist;
+    this.t.dist = Math.min(this.maxDist, Math.max(this.minDist, old * Math.exp(delta * 0.0012)));
+    if (px === undefined) return;
+    const f = 1 - this.t.dist / old;
+    this.t.fx += (px - this.t.fx) * f; this.t.fz += (pz - this.t.fz) * f;
+    this.clamp();
+  }
   rotate(d) { this.t.yaw += d; }
   clamp() { const m = HALF - 25; this.t.fx = Math.max(-m, Math.min(m, this.t.fx)); this.t.fz = Math.max(-m, Math.min(m, this.t.fz)); }
   // keys: {x:-1..1 (right), y:-1..1 (forward)}, rot: -1..1
@@ -40,7 +48,13 @@ export class RTSCamera {
     const fy = this.terrain.heightAt(fx, fz);
     const cp = Math.cos(p);
     const x = fx + Math.sin(yaw) * cp * dist, z = fz + Math.cos(yaw) * cp * dist;
-    const y = Math.max(fy + Math.sin(p) * dist, this.terrain.heightAt(x, z) + 4);
+    // keep the camera (and a few points along its view ray) clear of terrain and tree canopies (~14 units)
+    const th = this.terrain;
+    let y = Math.max(fy + Math.sin(p) * dist, th.heightAt(x, z) + 14);
+    for (const u of [0.2, 0.4, 0.6]) {
+      const hu = th.heightAt(x + (fx - x) * u, z + (fz - z) * u) + 8;
+      y = Math.max(y, (hu - fy * u) / (1 - u));
+    }
     this.cam.position.set(x, y, z);
     this.cam.lookAt(fx, fy, fz);
     // tilt the view up so the horizon sits near the top of the screen (fov 46: half 0.40 rad); fades out toward top-down zoom

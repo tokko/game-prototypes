@@ -91,7 +91,7 @@ export class Input {
     dom.addEventListener('mousedown', e => this.onDown(e));
     window.addEventListener('mousemove', e => this.onMove(e));
     window.addEventListener('mouseup', e => this.onUp(e));
-    dom.addEventListener('wheel', e => { e.preventDefault(); this.rts.zoom(e.deltaY); }, { passive: false });
+    dom.addEventListener('wheel', e => { e.preventDefault(); const g = this.pickGround(e.clientX, e.clientY); g ? this.rts.zoom(e.deltaY, g.x, g.z) : this.rts.zoom(e.deltaY); }, { passive: false });
     dom.addEventListener('dblclick', e => this.onDbl(e));
     window.addEventListener('keydown', e => this.onKey(e, true));
     window.addEventListener('keyup', e => this.onKey(e, false));
