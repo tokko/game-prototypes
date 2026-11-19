@@ -232,7 +232,8 @@ export function createApparitions(game, host) {
       update(dt, { observed }) {
         faceCamera(grp);
         const d = grp.position.distanceTo(camera.position);
-        em.opacity = clamp(fogTr(d) * 3, 0, 1);
+        const lit = clamp(this.lamp ? this.lamp.flicker : 1, 0, 1);   // like the figure: dark while its lamp flickers
+        body.material.opacity = lit; em.opacity = clamp(fogTr(d) * 3, 0, 1) * lit;
         if (!isNoticed || !observed) return; // it holds still; the smile only advances while it is being watched
         hold += dt;
         const m = clamp((hold - CREATURE_BEAT) / CREATURE_MORPH, 0, 1), k = Math.round(m * 32);
