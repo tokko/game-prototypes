@@ -4,6 +4,7 @@
 // Visual apparitions share one small interface used by the director:
 //   name, fogK, minDist, maxDwell, maxChanges, point (gaze point), lamp
 //   pointFor(anchor) -> Vector3, spawn(anchor, lamp), change(), vanish(), noticed(), update(dt, {observed})
+// The director's `host` gives it tension(v), log(id) and ring() (per-zone radius scale for random sounds).
 import * as THREE from 'three';
 import * as P from './path.js';
 import * as T from './textures.js';
@@ -15,7 +16,7 @@ const V3 = THREE.Vector3;
 // Apparition tuning (looks and timing of the shows themselves).
 const CREATURE_BEAT = 1.4;      // s after being noticed before the eyes start to curve
 const CREATURE_MORPH = 4.5;     // s for the eyes to go from round glows to crescents (counts only while observed)
-const FIGURE_STEP = 0.95;       // m the distant figure moves toward the player when it "changes"
+const FIGURE_STEP = 1.6;        // m the distant figure moves toward the player when it "changes"
 const STEPS_ECHO_COUNT = 7;     // follower steps that echo the player's own before drifting out of sync
 const STEPS_START_DIST = 11;    // m behind the player
 const STEPS_CLOSE_RATE = 1.15;  // m/s while closing in (player walks 1.3)
@@ -36,8 +37,8 @@ export function createApparitions(game, host) {
   const later = (fn, s) => timers.push({ at: now + s, fn });
 
   // ---- audio-only one-shots: each takes an optional world position -------------------------------
-  const ring = (r0, r1, y = 0.4) => {
-    const a = Math.random() * 6.283, r = rnd(r0, r1);
+  const ring = (r0, r1, y = 0.4) => {   // the director scales the radius per zone (sounds close in as the walk goes on)
+    const a = Math.random() * 6.283, r = Math.max(1, rnd(r0, r1) * host.ring());
     return { x: camera.position.x + Math.cos(a) * r, y, z: camera.position.z + Math.sin(a) * r };
   };
   const knockOne = (out, t, g = 0.5) => {
@@ -79,6 +80,34 @@ export function createApparitions(game, host) {
         A.noiseBurst(out, t, { type: 'lowpass', freq: 280, attack: 0.7, dur: 1.6, gain: 0.5 });
         A.tone(out, t, { freq: 72, freqEnd: 52, type: 'sawtooth', attack: 0.6, dur: 1.6, gain: 0.05, lp: 200 });
       }, 3);
+    },
+    'heavy-drag'(pos = ring(3, 5)) { // something heavy hauled close by, ending in a crack of wood
+      A.playAt(pos, (c, out, t) => {
+        A.noiseBurst(out, t, { type: 'lowpass', freq: 240, attack: 0.5, dur: 1.5, gain: 0.9 });
+        A.tone(out, t, { freq: 64, freqEnd: 42, type: 'sawtooth', attack: 0.5, dur: 1.5, gain: 0.1, lp: 180 });
+        A.noiseBurst(out, t + 1.7, { type: 'highpass', freq: 1800, dur: 0.06, gain: 0.7 });
+        A.noiseBurst(out, t + 1.7, { type: 'bandpass', freq: 700, q: 1.3, dur: 0.22, gain: 0.6 });
+        A.tone(out, t + 1.7, { freq: 200, freqEnd: 90, type: 'triangle', dur: 0.1, gain: 0.3 });
+      }, 3.5);
+    },
+    click(pos = ring(1, 2, 1.2)) { // a switch or a lamp catching
+      A.playAt(pos, (c, out, t) => {
+        A.noiseBurst(out, t, { type: 'highpass', freq: 3000, dur: 0.015, gain: 0.55 });
+        A.tone(out, t, { freq: 1800, freqEnd: 900, dur: 0.02, gain: 0.25 });
+        A.tone(out, t + 0.05, { freq: 140, freqEnd: 90, dur: 0.06, gain: 0.2 });
+      }, 0.6);
+    },
+    hum(pos = ring(12, 20, 2)) { // the forest lure: a faint wandering whistle, a few uneven notes
+      A.playAt(pos, (c, out, t) => {
+        const f = rnd(480, 560), notes = [1, 1.19, 1.12, 0.89], o = c.createOscillator(), v = c.createOscillator(), vg = c.createGain(), g = c.createGain();
+        o.type = 'sine'; v.type = 'sine'; v.frequency.value = rnd(4.5, 6); vg.gain.value = 5;
+        o.frequency.setValueAtTime(f, t);
+        notes.forEach((k, i) => i && o.frequency.setTargetAtTime(f * k, t + i * 0.7, 0.12));
+        g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.07, t + 0.5); g.gain.setValueAtTime(0.07, t + 2.2); g.gain.exponentialRampToValueAtTime(0.0001, t + 3.2);
+        v.connect(vg).connect(o.frequency); o.connect(g).connect(out);
+        A.noiseBurst(out, t, { type: 'bandpass', freq: 1600, q: 4, attack: 0.5, dur: 2.5, gain: 0.025 }); // breath
+        o.start(t); v.start(t); o.stop(t + 3.3); v.stop(t + 3.3);
+      }, 3.8);
     },
     'distant-steps'(pos = ring(18, 32)) { // someone walking parallel to the path, out in the dark
       const surf = P.surfaceAt(player.s) === 'cobble' ? 'cobble' : player.zone === 'estate' ? 'gravel' : 'dirt';
@@ -183,13 +212,16 @@ export function createApparitions(game, host) {
   // ---- 3. shadow creature half behind stone or foliage -------------------------------------------
   const creature = (() => {
     const grp = new THREE.Group(); grp.visible = false;
-    const body = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.9), mat(T.creatureTex(), { opacity: 0.95 })); body.position.y = 0.98;
+    const body = new THREE.Mesh(new THREE.PlaneGeometry(1.25, 2.3), mat(T.creatureTex(), { opacity: 1 })); body.position.y = 1.18;
     const E = T.eyesTex();
     const em = mat(E.tex, { blending: THREE.AdditiveBlending, fog: false, opacity: 0 });
-    const eyes = new THREE.Mesh(new THREE.PlaneGeometry(1.28, 0.32), em); eyes.position.set(0, 1.4, 0.03); eyes.renderOrder = 2;
+    const eyes = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.45), em); eyes.position.set(0, 1.7, 0.03); eyes.renderOrder = 2;
     grp.add(body, eyes); scene.add(grp);
     let hold = 0, isNoticed = false, step = -1;
-    const place = (a) => new V3(a.pos.x + (a.peekPos.x - a.pos.x) * 0.45, 0, a.pos.z + (a.peekPos.z - a.pos.z) * 0.45); // tucked in behind the cover
+    const place = (a) => { // half behind the cover: just beyond its far edge as seen from the path, so the stone hides about half of it
+      const p = P.pointAt(a.s), side = a.side === 'left' ? -1 : 1;
+      return new V3(a.pos.x + p.tx * 0.6 - side * p.rx * 0.55, 0, a.pos.z + p.tz * 0.6 - side * p.rz * 0.55);
+    };
     return {
       name: 'forest-shadow', fogK: 1, minDist: 9, maxDwell: 7.5, maxChanges: 0, point: new V3(), lamp: null,
       pointFor: (a) => place(a).setY(1.3),
@@ -200,7 +232,7 @@ export function createApparitions(game, host) {
       update(dt, { observed }) {
         faceCamera(grp);
         const d = grp.position.distanceTo(camera.position);
-        em.opacity = clamp(fogTr(d) * 2.5, 0, 1) * 0.95;
+        em.opacity = clamp(fogTr(d) * 3, 0, 1);
         if (!isNoticed || !observed) return; // it holds still; the smile only advances while it is being watched
         hold += dt;
         const m = clamp((hold - CREATURE_BEAT) / CREATURE_MORPH, 0, 1), k = Math.round(m * 32);
@@ -212,8 +244,8 @@ export function createApparitions(game, host) {
   // ---- 4. distant figure at the edge of the light ------------------------------------------------
   const figure = (() => {
     const grp = new THREE.Group(); grp.visible = false;
-    const m = mat(T.figureTex(), { opacity: 0.85 });
-    const body = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 2.0), m); body.position.y = 1.0; grp.add(body); scene.add(grp);
+    const m = mat(T.figureTex(), { opacity: 0.95 });
+    const body = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 2.5), m); body.position.y = 1.25; grp.add(body); scene.add(grp);
     return {
       name: 'distant-figure', fogK: 1, minDist: 11, maxDwell: 4, maxChanges: 1, point: new V3(), lamp: null,
       pointFor: (a) => a.pos.clone().setY(1.0),
@@ -225,7 +257,7 @@ export function createApparitions(game, host) {
       },
       vanish() { grp.visible = false; },
       noticed() {},
-      update() { faceCamera(grp); m.opacity = 0.85 * clamp(this.lamp ? this.lamp.flicker : 1, 0, 1); },
+      update() { faceCamera(grp); m.opacity = 0.95 * clamp(this.lamp ? this.lamp.flicker : 1, 0, 1); },
     };
   })();
 

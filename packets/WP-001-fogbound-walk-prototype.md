@@ -125,3 +125,14 @@ build tooling, test harnesses, claims that the experience is scary.
 Scare tuning and atmosphere quality are playtest-dependent and remain a
 post-integration human playtest gate. Technical acceptance is: it runs, the
 systems above exist and behave as specified, no console errors.
+
+## Rework (RUN-20261119-02)
+
+Human playtest feedback on the first build: scares were random dice rolls not tied to places, and nothing escalated. Approved direction (option 1): keep the attention director as the random layer and add authored beats at fixed places, with per-zone escalation. T1 reworked the layout (432 m route of distinct places, narrow and open sections, beat anchors and toggles). T2 (this note) is the beats half:
+
+- `BEATS` table in `director.js`: 12 one-shot set pieces keyed to the route (village sounds plus one glimpse; forest lure, fence, clearing creature, hollow; estate courtyard figure, corridor figure, landing light, corridor door). They obey the director's rules (sound before sight, spawn and change only while unobserved, look-away gone or changed, lingering look denied), take priority, and quiet random events around them.
+- `TUNING.ZONE` escalation for the random layer (village audio only and sparse, forest closer sounds and a rare creature, estate densest); overall random density is lower than before.
+- Forest creature and distant figure made more legible (larger, brighter eyes, rim light) while staying partly hidden; new one-shot sounds for the lure hum, the fence drag and the lamp click; debug overlay lists beat states.
+- Deviations: the corridor figure's window is s 376-393 (it appears at the far end of the straight corridor, not after the bend, because the bend wall blocks the line of sight from beyond it); the square woman's window is s 84-106 (the window is only visible from about s 94).
+
+Status line unchanged: the human playtest gate (beat placement, scare pacing, atmosphere, audio) is still open.

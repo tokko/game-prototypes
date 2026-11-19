@@ -284,6 +284,9 @@ export function creatureTex() {
       const a = r() * 6.28, x = w / 2 + Math.cos(a) * 20, y = h * 0.27 + Math.sin(a) * 26, l = 8 + r() * 16;
       ctx.lineWidth = 1 + r() * 2; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); ctx.stroke();
     }
+    ctx.shadowBlur = 0; ctx.strokeStyle = 'rgba(120,138,165,0.5)'; ctx.lineWidth = 2; // a faint cold rim so the silhouette reads against fog
+    ctx.beginPath(); ctx.ellipse(w / 2, h * 0.27, 27, 33, 0, 0, 7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(w * 0.1, h); ctx.quadraticCurveTo(w * 0.04, h * 0.5, w * 0.3, h * 0.4); ctx.moveTo(w * 0.7, h * 0.4); ctx.quadraticCurveTo(w * 0.96, h * 0.5, w * 0.9, h); ctx.stroke();
   });
 }
 
@@ -319,7 +322,7 @@ export function figureTex() {
     ctx.beginPath(); ctx.moveTo(w * 0.3, h * 0.2); ctx.lineTo(w * 0.7, h * 0.2); ctx.lineTo(w * 0.8, h * 0.62); ctx.lineTo(w * 0.86, h);
     ctx.lineTo(w * 0.14, h); ctx.lineTo(w * 0.2, h * 0.62); ctx.closePath(); ctx.fill();
     ctx.fillRect(w * 0.16, h * 0.22, 7, h * 0.46); ctx.fillRect(w * 0.84 - 7, h * 0.22, 7, h * 0.46); // arms
-    ctx.shadowBlur = 0; ctx.strokeStyle = 'rgba(70,82,98,0.4)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.shadowBlur = 0; ctx.strokeStyle = 'rgba(120,138,165,0.6)'; ctx.lineWidth = 1.5; ctx.stroke();
     ctx.fillStyle = 'rgb(98,107,118)'; ctx.beginPath(); ctx.ellipse(w / 2 + 1, h * 0.12, 8, 11, 0.12, 0, 7); ctx.fill();
   });
 }
