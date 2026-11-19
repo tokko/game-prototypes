@@ -42,12 +42,13 @@ const startEl = document.getElementById('start'), endEl = document.getElementByI
 const msgEl = document.getElementById('startmsg');
 startEl.addEventListener('click', () => {
   audio.start();
-  renderer.domElement.requestPointerLock?.();
+  const showResume = () => { msgEl.textContent = 'click to resume'; startEl.classList.remove('hidden'); };
+  try { Promise.resolve(renderer.domElement.requestPointerLock?.()).catch(showResume); } catch { showResume(); }
   if (game.state === 'title') game.state = 'walking';
-  startEl.classList.add('hidden');
 });
-document.addEventListener('pointerlockchange', () => {
-  if (game.state === 'walking' && !player.locked) { msgEl.textContent = 'click to resume'; startEl.classList.remove('hidden'); }
+document.addEventListener('pointerlockchange', () => {   // overlay hides only once the lock is held
+  if (player.locked) startEl.classList.add('hidden');
+  else if (game.state === 'walking') { msgEl.textContent = 'click to resume'; startEl.classList.remove('hidden'); }
 });
 document.getElementById('restart').addEventListener('click', () => { location.href = location.pathname; });
 
