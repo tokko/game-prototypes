@@ -4,6 +4,8 @@ Status:
 claimed
 Claimed by: RUN-20261119-01 (coordinator session, Claude Code)
 Claimed at: 2026-11-19T07:15Z
+Implementation: integrated into main at 43bb085 (RUN-20261119-01).
+Pending: post-integration human playtest gate (scare tuning, atmosphere, audio).
 
 ## Outcome
 
