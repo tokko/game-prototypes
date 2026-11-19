@@ -199,10 +199,12 @@ export function buildWorld(scene) {
     while (s < S1 - 28) {
       const w = 6 + rand() * 4, d = 6 + rand() * 3, h = 4.6 + rand() * 1.8, rise = 2.2 + rand() * 1.2;
       if (side === -1 && s + w > ALLEY_S - 3.5 && s < ALLEY_S + 3.5) { s = ALLEY_S + 3.5; continue; }
-      const sc = s + w / 2, F = 4.3 + rand() * 0.8, p = P.pointAt(sc);
-      const cx = p.x + side * p.rx * (F + d / 2), cz = p.z + side * p.rz * (F + d / 2);
-      const yaw = Math.atan2(-side * p.rx, -side * p.rz) + (rand() - 0.5) * 0.1;
       const anchor = wi % 9 === 4 && anchors.windows.length < 5 ? `village-window-${anchors.windows.length + 1}` : null;
+      const sc = s + w / 2, F = 4.3 + rand() * 0.8 + (anchor ? 1.5 : 0), p = P.pointAt(sc);
+      const cx = p.x + side * p.rx * (F + d / 2), cz = p.z + side * p.rz * (F + d / 2);
+      let yaw = Math.atan2(-side * p.rx, -side * p.rz) + (rand() - 0.5) * 0.1;
+      // anchor houses turn their face back toward the approaching player so the window is not seen edge-on
+      if (anchor) { const nx = -side * p.rx * 0.8 - p.tx * 0.6, nz = -side * p.rz * 0.8 - p.tz * 0.6; yaw = Math.atan2(nx, nz); }
       house(cx, cz, yaw, w, d, h, rise, anchor); wi++;
       s += w + 1 + rand() * 3 + (rand() < 0.08 ? 9 : 0);
     }

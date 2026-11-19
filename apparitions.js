@@ -161,9 +161,9 @@ export function createApparitions(game, host) {
 
   // ---- 2. pale woman behind a window pane --------------------------------------------------------
   const woman = (() => {
-    const m = mat(T.womanTex(), { opacity: 0.8 });
+    const m = mat(T.womanTex(), { opacity: 0.9 });
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.99), m); mesh.renderOrder = 1; mesh.visible = false; scene.add(mesh);
-    const stages = [{ s: 0.82, dy: -0.2, rz: 0, op: 0.7 }, { s: 1.0, dy: -0.12, rz: 0.04, op: 0.9 }]; // [far from the glass, close to it]
+    const stages = [{ s: 1.0, dy: -0.2, rz: 0, op: 0.9 }, { s: 1.18, dy: -0.12, rz: 0.04, op: 1.0 }]; // [far from the glass, close to it]
     let anchor = null, st = 0;
     const apply = () => {
       const o = stages[st];

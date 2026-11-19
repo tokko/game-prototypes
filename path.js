@@ -83,13 +83,13 @@ export function interiorAt(s) {
   return smooth(DOOR_S - 2.5, DOOR_S + 1.5, s) * (1 - smooth(END_S + 1, END_S + 4, s));
 }
 
-const FOG_BASE = [0.040, 0.058, 0.022];
+const FOG_BASE = [0.024, 0.034, 0.014];
 export function fogDensity(s) {
   const w = zoneWeights(s);
   let d = w[0] * FOG_BASE[0] + w[1] * FOG_BASE[1] + w[2] * FOG_BASE[2];
   const i = interiorAt(s);
-  d = d * (1 - i) + 0.04 * i;
-  for (const g of GATES) d += 0.10 * Math.exp(-(((s - g) / 12) ** 2)); // the fog gate swell
+  d = d * (1 - i) + 0.025 * i;
+  for (const g of GATES) d += 0.06 * Math.exp(-(((s - g) / 12) ** 2)); // the fog gate swell
   return d;
 }
 
