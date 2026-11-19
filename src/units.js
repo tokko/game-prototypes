@@ -133,7 +133,15 @@ export class Regiment {
       dest = [this.order.x, this.order.z]; maxSp = this.run ? def.run : def.walk;
       if (this.order.face !== null && Math.hypot(dest[0] - this.x, dest[1] - this.z) < 14) { wantFace = this.order.face; crab = true; }
     } else if (this.order.type === 'attack') {
-      const t = this.order.target;
+      let t = this.order.target;
+      if (t && t.state === 'gone' && this.side === 'player') {   // target destroyed/fled: keep attacking the nearest foe (AI manages its own retargeting)
+        let bd = 1e9; t = null;
+        for (const e of w.regs) {
+          if (e.side === this.side || e.state === 'gone') continue;
+          const d = Math.hypot(e.x - this.x, e.z - this.z); if (d < bd) { bd = d; t = e; }
+        }
+        if (t) this.order.target = t;
+      }
       if (!t || t.state === 'gone') { this.order = { type: 'idle' }; }
       else {
         const d = rangeTo(this, t);

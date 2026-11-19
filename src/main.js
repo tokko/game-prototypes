@@ -139,7 +139,8 @@ function step(dt) {
   world.selection = world.selection.filter(r => r.state !== 'gone' || (r.selected = false));
 }
 
-game.step = step; // exposed for quick headless checks
+// exposed for quick headless checks; also advances soldier figures (normally done per frame) so footprint rings stay on the units
+game.step = (dt) => { step(dt); for (const r of world.regs) r.updateSoldiers(dt, visTime); };
 let last = performance.now(), visTime = 0;
 function frame(now) {
   requestAnimationFrame(frame);
