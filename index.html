@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fogbound Walk</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: Georgia, 'Times New Roman', serif; color: #b9c4d0; }
+  canvas { display: block; }
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+             background: rgba(3, 6, 10, 0.55); text-align: center; letter-spacing: 0.12em; transition: opacity 0.6s; }
+  .overlay.hidden { opacity: 0; pointer-events: none; }
+  #start { cursor: pointer; }
+  h1 { font-weight: normal; font-size: 2.2rem; margin: 0 0 1.2rem; letter-spacing: 0.3em; }
+  #startmsg { font-size: 1.1rem; }
+  .hint { margin-top: 2rem; font-size: 0.8rem; opacity: 0.55; }
+  #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; }
+  #end { background: #000; opacity: 0; pointer-events: none; transition: opacity 2s; }
+  #end.shown { opacity: 1; pointer-events: auto; }
+  #end p { margin: 0 0 2rem; font-size: 1.2rem; }
+  button { background: none; border: 1px solid #5a6672; color: #b9c4d0; font: inherit; letter-spacing: 0.15em; padding: 0.6rem 1.6rem; cursor: pointer; }
+  button:hover { border-color: #b9c4d0; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="fade"></div>
+<div id="start" class="overlay">
+  <h1>FOGBOUND WALK</h1>
+  <div id="startmsg">click to walk</div>
+  <div class="hint">WASD / arrows to walk &middot; Shift to hurry &middot; mouse to look &middot; Esc to pause</div>
+</div>
+<div id="end" class="overlay">
+  <p>The fog closes behind you.</p>
+  <button id="restart">walk again</button>
+</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

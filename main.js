@@ -1,0 +1,74 @@
+// Entry: renderer, scene, game loop, start/end overlays.
+import * as THREE from 'three';
+import * as P from './path.js';
+import { buildWorld, FOG_COLOR } from './world.js';
+import { createPlayer } from './player.js';
+import { createPost } from './post.js';
+import { audio } from './audio.js';
+
+const params = new URLSearchParams(location.search);
+const startZone = P.ZONES.includes(params.get('zone')) ? params.get('zone') : 'village';
+
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(FOG_COLOR);
+scene.fog = new THREE.FogExp2(FOG_COLOR, 0.04);
+const camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 260);
+
+const world = buildWorld(scene);
+const player = createPlayer(camera, renderer.domElement, startZone, (surface, brisk) => audio.footstep(surface, brisk));
+const post = createPost(renderer, scene, camera);
+
+// Shared handles for later modules (director etc.).
+export const game = { THREE, scene, camera, renderer, world, player, audio, post, path: P, state: 'title' };
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  post.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---- overlays ---------------------------------------------------------------------------
+const startEl = document.getElementById('start'), endEl = document.getElementById('end'), fadeEl = document.getElementById('fade');
+const msgEl = document.getElementById('startmsg');
+startEl.addEventListener('click', () => {
+  audio.start();
+  renderer.domElement.requestPointerLock?.();
+  if (game.state === 'title') game.state = 'walking';
+  startEl.classList.add('hidden');
+});
+document.addEventListener('pointerlockchange', () => {
+  if (game.state === 'walking' && !player.locked) { msgEl.textContent = 'click to resume'; startEl.classList.remove('hidden'); }
+});
+document.getElementById('restart').addEventListener('click', () => { location.href = location.pathname; });
+
+// ---- loop -------------------------------------------------------------------------------
+const clock = new THREE.Clock();
+let fade = 0;
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+  if (game.state === 'walking') player.update(dt); else player.update(0.0001);
+  scene.fog.density = P.fogDensity(player.s);
+  world.update(camera.position, player.s, scene.fog.density, t);
+  audio.update(dt, player.s, camera);
+
+  // ending: past the corridor exit door the screen fades to black, then the end screen
+  if (game.state === 'walking') {
+    fade = THREE.MathUtils.clamp((player.s - P.END_S - 1) / (P.LENGTH - P.END_S - 3), 0, 1);
+    if (fade >= 1) {
+      game.state = 'ended'; player.frozen = true;
+      document.exitPointerLock?.();
+      endEl.classList.add('shown');
+    }
+  }
+  fadeEl.style.opacity = fade;
+  post.render(t);
+}
+frame();
