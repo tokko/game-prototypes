@@ -225,7 +225,12 @@ export function createApparitions(game, host) {
     return {
       name: 'forest-shadow', fogK: 1, minDist: 9, maxDwell: 7.5, maxChanges: 0, point: new V3(), lamp: null,
       pointFor: (a) => place(a).setY(1.3),
-      spawn(a) { grp.position.copy(place(a)); this.point.copy(grp.position).setY(1.3); hold = 0; isNoticed = false; step = -1; E.draw(0); grp.visible = true; faceCamera(grp); },
+      spawn(a, lamp) {
+        grp.position.copy(place(a)); this.point.copy(grp.position).setY(1.3); hold = 0; isNoticed = false; step = -1; E.draw(0); this.lamp = lamp;
+        const lit = clamp(lamp ? lamp.flicker : 1, 0, 1);   // the first rendered frame already honours a flicker
+        body.material.opacity = lit; em.opacity = clamp(fogTr(grp.position.distanceTo(camera.position)) * 3, 0, 1) * lit;
+        grp.visible = true; faceCamera(grp);
+      },
       change: () => false,
       vanish() { grp.visible = false; },
       noticed() { isNoticed = true; },
@@ -250,7 +255,7 @@ export function createApparitions(game, host) {
     return {
       name: 'distant-figure', fogK: 1, minDist: 11, maxDwell: 4, maxChanges: 1, point: new V3(), lamp: null,
       pointFor: (a) => a.pos.clone().setY(1.0),
-      spawn(a, lamp) { grp.position.copy(a.pos); grp.position.y = 0; this.lamp = lamp; this.point.copy(a.pos).setY(1.0); grp.visible = true; faceCamera(grp); },
+      spawn(a, lamp) { grp.position.copy(a.pos); grp.position.y = 0; this.lamp = lamp; this.point.copy(a.pos).setY(1.0); m.opacity = 0.95 * clamp(lamp ? lamp.flicker : 1, 0, 1); grp.visible = true; faceCamera(grp); },
       change() {
         const dx = camera.position.x - grp.position.x, dz = camera.position.z - grp.position.z, d = Math.hypot(dx, dz) || 1;
         grp.position.x += (dx / d) * FIGURE_STEP; grp.position.z += (dz / d) * FIGURE_STEP; this.point.copy(grp.position).setY(1.0);
