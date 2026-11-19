@@ -202,7 +202,7 @@ function footstep(surface, brisk) {
 }
 
 export const audio = {
-  start, update, footstep, playAt, footstepAt, makePanner, noiseBurst, tone, lx: 0, lz: 0,
+  start, update, footstep, playAt, footstepAt, makePanner, noiseBurst, tone, stepSound, lx: 0, lz: 0,
   get ctx() { return ctx; },
   get ready() { return !!ctx && ctx.state === 'running'; },
 };

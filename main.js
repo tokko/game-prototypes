@@ -5,6 +5,7 @@ import { buildWorld, FOG_COLOR } from './world.js';
 import { createPlayer } from './player.js';
 import { createPost } from './post.js';
 import { audio } from './audio.js';
+import { createDirector } from './director.js';
 
 const params = new URLSearchParams(location.search);
 const startZone = P.ZONES.includes(params.get('zone')) ? params.get('zone') : 'village';
@@ -22,11 +23,13 @@ scene.fog = new THREE.FogExp2(FOG_COLOR, 0.04);
 const camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 260);
 
 const world = buildWorld(scene);
-const player = createPlayer(camera, renderer.domElement, startZone, (surface, brisk) => audio.footstep(surface, brisk));
+let director = null;
+const player = createPlayer(camera, renderer.domElement, startZone, (surface, brisk) => { audio.footstep(surface, brisk); director?.onPlayerStep(); });
 const post = createPost(renderer, scene, camera);
 
-// Shared handles for later modules (director etc.).
+// Shared handles for later modules.
 export const game = { THREE, scene, camera, renderer, world, player, audio, post, path: P, state: 'title' };
+director = game.director = createDirector(game);
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
@@ -55,7 +58,8 @@ function frame() {
   requestAnimationFrame(frame);
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
   if (game.state === 'walking') player.update(dt); else player.update(0.0001);
-  scene.fog.density = P.fogDensity(player.s);
+  director.update(dt);
+  scene.fog.density = P.fogDensity(player.s) + director.fogSwell;
   world.update(camera.position, player.s, scene.fog.density, t);
   audio.update(dt, player.s, camera);
 

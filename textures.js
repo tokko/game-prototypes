@@ -216,3 +216,86 @@ export function streak() {
     ctx.putImageData(img, 0, 0);
   });
 }
+
+// ---- apparition billboards (transparent, dark, low contrast) -------------------------------
+
+// Pale woman behind glass: black hair hanging over the face, pale neck and chest, grey dress.
+export function womanTex() {
+  return canvasTex(160, 256, (ctx, w, h) => {
+    const r = rng(101);
+    ctx.clearRect(0, 0, w, h);
+    const halo = ctx.createRadialGradient(w / 2, h * 0.36, 8, w / 2, h * 0.36, 90); // faint backlight from the room
+    halo.addColorStop(0, 'rgba(110,120,132,0.35)'); halo.addColorStop(1, 'rgba(110,120,132,0)');
+    ctx.fillStyle = halo; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgb(58,64,72)'; // shoulders and dress
+    ctx.beginPath(); ctx.moveTo(4, h); ctx.quadraticCurveTo(10, h * 0.7, w * 0.34, h * 0.63); ctx.lineTo(w * 0.66, h * 0.63);
+    ctx.quadraticCurveTo(w - 10, h * 0.7, w - 4, h); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgb(160,168,176)'; // neck, chest, face
+    ctx.beginPath(); ctx.moveTo(w * 0.36, h * 0.63); ctx.lineTo(w * 0.5, h * 0.78); ctx.lineTo(w * 0.64, h * 0.63); ctx.closePath(); ctx.fill();
+    ctx.fillRect(w / 2 - 10, h * 0.5, 20, h * 0.14);
+    ctx.beginPath(); ctx.ellipse(w / 2, h * 0.36, 29, 42, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgb(3,3,5)'; // hair: cap over the crown, then curtains falling over the face and shoulders
+    ctx.beginPath(); ctx.ellipse(w / 2, h * 0.26, 38, 34, 0, Math.PI, 0); ctx.fill();
+    ctx.strokeStyle = 'rgb(3,3,5)'; ctx.lineCap = 'round';
+    for (let i = 0; i < 110; i++) {
+      const x0 = w / 2 + (r() - 0.5) * 76, y0 = h * 0.22 + r() * 10, y1 = h * (0.6 + r() * 0.36), sway = (r() - 0.5) * 30;
+      ctx.lineWidth = 1.5 + r() * 3;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.bezierCurveTo(x0 + sway, y0 + (y1 - y0) * 0.35, x0 - sway * 0.6, y0 + (y1 - y0) * 0.7, x0 + sway * 0.5, y1); ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(205,213,222,0.7)'; ctx.fillRect(w / 2 - 8, h * 0.395, 2, 2); ctx.fillRect(w / 2 + 6, h * 0.395, 2, 2); // glints through the hair
+  });
+}
+
+// Shadow creature body: hunched near-black silhouette with ragged edges. Eyes are a separate plane.
+export function creatureTex() {
+  return canvasTex(128, 256, (ctx, w, h) => {
+    const r = rng(111);
+    ctx.clearRect(0, 0, w, h);
+    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 8; ctx.fillStyle = 'rgb(2,3,5)';
+    ctx.beginPath(); ctx.ellipse(w / 2, h * 0.27, 27, 33, 0, 0, 7); ctx.fill();            // head
+    ctx.beginPath(); ctx.moveTo(w * 0.1, h); ctx.quadraticCurveTo(w * 0.04, h * 0.5, w * 0.3, h * 0.4);
+    ctx.lineTo(w * 0.7, h * 0.4); ctx.quadraticCurveTo(w * 0.96, h * 0.5, w * 0.9, h); ctx.closePath(); ctx.fill(); // hunched body
+    ctx.strokeStyle = 'rgb(2,3,5)'; ctx.lineCap = 'round';
+    for (let i = 0; i < 26; i++) { // ragged strands
+      const a = r() * 6.28, x = w / 2 + Math.cos(a) * 20, y = h * 0.27 + Math.sin(a) * 26, l = 8 + r() * 16;
+      ctx.lineWidth = 1 + r() * 2; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); ctx.stroke();
+    }
+  });
+}
+
+// Pair of luminous eyes. draw(m): m = 0 round glows, m = 1 upward-bowed crescents (a smile).
+export function eyesTex() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const draw = (m) => {
+    const ctx = c.getContext('2d'); ctx.clearRect(0, 0, 256, 64);
+    for (const cx of [98, 158]) {
+      const rx = 11 + 8 * m, hh = 10 * (1 - 0.7 * m), bow = 15 * m, N = 24;
+      const path = () => {
+        ctx.beginPath();
+        for (let i = 0; i <= N; i++) { const u = -1 + (2 * i) / N, e = Math.sqrt(Math.max(0, 1 - u * u)); ctx[i ? 'lineTo' : 'moveTo'](cx + u * rx, 36 - hh * e - bow * (1 - u * u)); }
+        for (let i = N; i >= 0; i--) { const u = -1 + (2 * i) / N, e = Math.sqrt(Math.max(0, 1 - u * u)); ctx.lineTo(cx + u * rx, 36 + hh * e - bow * (1 - u * u)); }
+        ctx.closePath();
+      };
+      ctx.shadowColor = 'rgba(170,240,200,0.95)'; ctx.shadowBlur = 18; ctx.fillStyle = 'rgba(190,245,215,0.8)'; path(); ctx.fill();
+      ctx.shadowBlur = 0; ctx.fillStyle = 'rgb(232,255,240)'; path(); ctx.fill();
+    }
+    tex.needsUpdate = true;
+  };
+  draw(0);
+  return { tex, draw };
+}
+
+// Distant figure: thin dark coat, faceless pale head, arms down.
+export function figureTex() {
+  return canvasTex(64, 160, (ctx, w, h) => {
+    ctx.clearRect(0, 0, w, h);
+    ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 3;
+    ctx.fillStyle = 'rgb(9,11,15)';
+    ctx.beginPath(); ctx.moveTo(w * 0.3, h * 0.2); ctx.lineTo(w * 0.7, h * 0.2); ctx.lineTo(w * 0.8, h * 0.62); ctx.lineTo(w * 0.86, h);
+    ctx.lineTo(w * 0.14, h); ctx.lineTo(w * 0.2, h * 0.62); ctx.closePath(); ctx.fill();
+    ctx.fillRect(w * 0.16, h * 0.22, 7, h * 0.46); ctx.fillRect(w * 0.84 - 7, h * 0.22, 7, h * 0.46); // arms
+    ctx.shadowBlur = 0; ctx.strokeStyle = 'rgba(70,82,98,0.4)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = 'rgb(98,107,118)'; ctx.beginPath(); ctx.ellipse(w / 2 + 1, h * 0.12, 8, 11, 0.12, 0, 7); ctx.fill();
+  });
+}

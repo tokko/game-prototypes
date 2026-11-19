@@ -25,8 +25,9 @@ const GradeShader = {
     void main() {
       vec3 c = texture2D(tDiffuse, vUv).rgb;
       float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-      c = mix(vec3(l), c, saturation);                  // desaturate
-      c *= vec3(0.80, 0.93, 1.12);                      // blue-black grade
+      float warm = smoothstep(0.02, 0.3, c.r - c.b);    // amber practicals keep their tint through the grade
+      c = mix(vec3(l), c, mix(saturation, 1.0, warm));  // desaturate
+      c *= mix(vec3(0.80, 0.93, 1.12), vec3(1.0, 0.95, 0.88), warm); // blue-black grade
       c += vec3(0.0015, 0.003, 0.006);                  // lifted blacks
       vec2 d = (vUv - 0.5) * vec2(resolution.x / resolution.y, 1.0);
       float v = smoothstep(0.95, 0.2, length(d));
