@@ -1,7 +1,10 @@
 // Renderer, lighting, sky, fog. Look-and-grade lives here.
 import * as THREE from 'three';
+import { createPost } from './post.js';
 
-export const HORIZON = 0xcfc6b0;
+// Horizon haze colour (linear). The sky dome's horizon and the scene fog share it so terrain fades seamlessly into sky.
+const HORIZON_LIN = new THREE.Color().setRGB(0.86, 0.57, 0.28, THREE.LinearSRGBColorSpace);
+export const HORIZON = HORIZON_LIN.getHex();
 
 export function createScene() {
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -21,7 +24,7 @@ export function createScene() {
   renderer.domElement.after(vig);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(HORIZON, 300, 1500);
+  scene.fog = new THREE.Fog(HORIZON_LIN.clone(), 380, 1700);
 
   const camera = new THREE.PerspectiveCamera(46, window.innerWidth / window.innerHeight, 1, 4500);
 
@@ -37,26 +40,31 @@ export function createScene() {
   scene.add(sun, sun.target);
   const sunDir = new THREE.Vector3(-0.82, 0.40, 0.28).normalize();   // late afternoon, ~22 deg, from the left
 
-  // sky dome
+  // sky dome: gold at the horizon -> pale blue-grey above, soft sun glow + disc, a few warm clouds
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { uSun: { value: sunDir.clone() } },
+    uniforms: { uSun: { value: sunDir.clone() }, uHor: { value: HORIZON_LIN.clone() } },
     vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-    fragmentShader: `varying vec3 vDir; uniform vec3 uSun;
+    fragmentShader: `varying vec3 vDir; uniform vec3 uSun; uniform vec3 uHor;
       float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
       float vn(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
         return mix(mix(h21(i),h21(i+vec2(1,0)),f.x), mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),f.x), f.y); }
       void main(){
-        float h = clamp(vDir.y, 0.0, 1.0);
-        vec3 hor = vec3(0.86,0.78,0.64), mid = vec3(0.60,0.70,0.82), top = vec3(0.24,0.42,0.72);
-        vec3 c = mix(hor, mid, smoothstep(0.0,0.22,h)); c = mix(c, top, smoothstep(0.18,0.85,h));
-        float s = max(dot(normalize(vDir), normalize(uSun)), 0.0);
-        vec2 q = vDir.xz / (vDir.y + 0.18) * 1.4;
+        vec3 d = normalize(vDir);
+        float h = clamp(d.y, 0.0, 1.0);
+        vec3 mid = vec3(0.50,0.58,0.68), top = vec3(0.26,0.38,0.58);
+        vec3 c = mix(uHor, mid, smoothstep(0.0,0.30,pow(h,0.7))); c = mix(c, top, smoothstep(0.22,0.95,h));
+        float s = max(dot(d, normalize(uSun)), 0.0);
+        // warm haze brightening toward the sun, fading out at the horizon line itself so it still matches the fog
+        c += vec3(1.0,0.62,0.28) * pow(s,4.0) * 0.38 * smoothstep(0.0,0.12,h);
+        vec2 q = d.xz / (d.y + 0.2) * 1.4;
         float cl = vn(q) * 0.55 + vn(q * 2.3) * 0.3 + vn(q * 5.1) * 0.15;
-        cl = smoothstep(0.5, 0.8, cl) * smoothstep(0.02, 0.2, h);
-        vec3 cc = mix(vec3(1.0,0.86,0.68), vec3(0.78,0.74,0.76), 1.0 - s);
-        c = mix(c, cc, cl * 0.75);
-        c += vec3(1.0,0.7,0.35)*pow(s,5.0)*0.42 + vec3(1.0,0.9,0.7)*pow(s,80.0)*0.7;
+        cl = smoothstep(0.5, 0.8, cl) * smoothstep(0.03, 0.22, h);
+        vec3 cc = mix(vec3(1.0,0.80,0.58), vec3(0.62,0.58,0.62), 1.0 - s);
+        c = mix(c, cc, cl * 0.7);
+        // sun glow + disc (HDR so bloom picks it up)
+        c += vec3(1.0,0.80,0.50) * pow(s,60.0) * 0.9 + vec3(1.0,0.9,0.7) * pow(s,400.0) * 2.0;
+        c += vec3(1.0,0.92,0.75) * smoothstep(0.99955, 0.99985, s) * 6.0;
         gl_FragColor = vec4(c,1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -66,10 +74,12 @@ export function createScene() {
   sky.renderOrder = -10; sky.frustumCulled = false;
   scene.add(sky);
 
+  const post = createPost(renderer, scene, camera, (lv) => { vig.style.display = lv === 0 ? '' : 'none'; });
   function resize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
+    post.resize(window.innerWidth, window.innerHeight);
   }
   window.addEventListener('resize', resize);
 
@@ -88,5 +98,8 @@ export function createScene() {
     sun.position.set(sx + sunDir.x * 450, fy + sunDir.y * 450, sz + sunDir.z * 450);
   }
 
-  return { renderer, scene, camera, sun, hemi, sky, updateSun, sunDir };
+  const render = () => post.render();
+  const setQuality = (lv) => { post.auto = false; post.setQuality(lv); };   // manual choice stops the auto-drop
+  window.__post = post;   // for quick headless checks (post.auto = false to hold a level)
+  return { renderer, scene, camera, sun, hemi, sky, updateSun, sunDir, composer: post.composer, render, setQuality };
 }

@@ -13,7 +13,7 @@ import { EnemyAI } from './ai.js';
 import { Input } from './input.js';
 import { UI } from './ui.js';
 
-const { renderer, scene, camera, updateSun } = createScene();
+const { renderer, scene, camera, updateSun, render } = createScene();
 const terrain = createTerrain(scene);
 
 const world = {
@@ -82,7 +82,7 @@ function clearZone() {
 }
 game.startDeployment = () => {
   game.phase = 'deployment'; rts.free = true;
-  rts.set(0, 300, 0, 470);
+  rts.set(0, 335, 0, 160);
   zoneGroup = new THREE.Group();
   zoneGroup.add(makeZone(ZONE, 0xe03820, 0.3, 0xffe080, 1), makeZone(ENEMY_ZONE, 0x3050c0, 0.07, 0x6a88ff, 0.35));
   scene.add(zoneGroup); game.zone = ZONE;
@@ -90,7 +90,7 @@ game.startDeployment = () => {
 };
 game.startBattle = () => {
   if (game.phase === 'battle' || game.phase === 'ended') return;
-  if (game.phase !== 'deployment') rts.set(0, 250, 0, 280); // keep the player's own camera when coming from deployment
+  if (game.phase !== 'deployment') rts.set(0, 335, 0, 160); // keep the player's own camera when coming from deployment
   clearZone();
   game.phase = 'battle'; rts.free = true;
   ui.banner('The battle begins', 3000);
@@ -98,7 +98,7 @@ game.startBattle = () => {
 function introUpdate(dt) {
   game.introT += dt;
   const k = Math.min(1, game.introT / INTRO_LEN), e = k * k * (3 - 2 * k);
-  rts.set(-80 + 80 * e, -120 + 370 * e, 1.1 * (1 - e), 650 - 370 * e);
+  rts.set(-80 + 80 * e, -120 + 455 * e, 1.1 * (1 - e), 600 - 440 * e);
   if (k >= 1) game.startDeployment();
 }
 
@@ -159,6 +159,6 @@ function frame(now) {
   units.update(visTime, camera, rts.s.dist);
   updateSun(rts.s.fx, terrain.heightAt(rts.s.fx, rts.s.fz), rts.s.fz, rts.s.dist);
   ui.update(dt);
-  renderer.render(scene, camera);
+  render();
 }
 requestAnimationFrame(frame);

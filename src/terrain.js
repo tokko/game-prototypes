@@ -1,5 +1,6 @@
 // Terrain, road, village, walls, trees, wheat. Look/scenery lives here.
 import * as THREE from 'three';
+import { createFoliage, stoneMaterial, stoneGeometry } from './foliage.js';
 
 export const MAP = 1200;
 export const HALF = MAP / 2;
@@ -76,43 +77,6 @@ function canvasTex(w, h, draw, repeat = true) {
   if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
   return t;
 }
-function grassTexture() {
-  return canvasTex(256, 256, (ctx, w, h) => {
-    const img = ctx.createImageData(w, h);
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const n = pnoise(x / 32, y / 32, 8) * 0.5 + pnoise(x / 16, y / 16, 16) * 0.3 + pnoise(x / 8, y / 8, 32) * 0.2;
-      const v = 0.86 + (n - 0.5) * 0.3, o = (y * w + x) * 4;
-      img.data[o] = 255 * v * 0.98; img.data[o + 1] = 255 * v; img.data[o + 2] = 255 * v * 0.9; img.data[o + 3] = 255;
-    }
-    ctx.putImageData(img, 0, 0);
-    const r = mulberry32(7); ctx.lineWidth = 1;
-    for (let i = 0; i < 2600; i++) {   // blade flecks
-      const x = 3 + r() * (w - 6), y = 3 + r() * (h - 6), l = 2 + r() * 4, dark = r() < 0.55;
-      ctx.strokeStyle = dark ? `rgba(70,80,30,${0.12 + r() * 0.18})` : `rgba(255,248,200,${0.1 + r() * 0.2})`;
-      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + (r() - 0.5) * 3, y - l); ctx.stroke();
-    }
-  });
-}
-function roadTexture() {   // across = x (road width), along = y, alpha-edged
-  return canvasTex(128, 256, (ctx, w, h) => {
-    const img = ctx.createImageData(w, h);
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const a = (x / (w - 1) - 0.5) * 2;
-      const n = pnoise(x / 16, y / 16, 16) * 0.5 + pnoise(x / 4, y / 4, 64) * 0.5;
-      let v = 0.8 + n * 0.3;
-      v *= 1 - 0.28 * Math.exp(-(((Math.abs(a) - 0.36) / 0.1) ** 2));   // cart ruts
-      v *= 1 + 0.08 * Math.exp(-((a / 0.12) ** 2));                      // crowned centre
-      const edge = Math.abs(a) + (pnoise(x / 8, y / 16, 16) - 0.5) * 0.35;
-      const grass = sstep(0.55, 0.9, edge);
-      const o = (y * w + x) * 4;
-      img.data[o] = 255 * v * (0.78 - grass * 0.2); img.data[o + 1] = 255 * v * (0.66 + grass * 0.04); img.data[o + 2] = 255 * v * (0.46 - grass * 0.12);
-      img.data[o + 3] = 255 * (1 - sstep(0.7, 1.0, edge));
-    }
-    ctx.putImageData(img, 0, 0);
-    const r = mulberry32(11);
-    for (let i = 0; i < 260; i++) { ctx.fillStyle = r() < 0.5 ? 'rgba(235,225,200,0.5)' : 'rgba(60,45,30,0.4)'; ctx.fillRect(18 + r() * 92, r() * h, 1 + r() * 2, 1 + r()); }
-  }, true);
-}
 // coursed stone blocks with optional openings; `feat` draws windows/doors on top
 function wallTexture(w, h, base, feat) {
   return canvasTex(w, h, (ctx) => {
@@ -156,28 +120,6 @@ function towerTexture() {
     ctx.beginPath(); ctx.arc(64, 200, 20, 0, 7); ctx.fillStyle = '#e8e0c4'; ctx.fill(); ctx.fillStyle = '#2a2622'; ctx.fillRect(63, 188, 2, 12); ctx.fillRect(63, 198, 9, 2);
   });
 }
-function wheatTexture() {   // alpha-cut card of nodding wheat stalks
-  return canvasTex(128, 128, (ctx, w, h) => {
-    const r = mulberry32(5);
-    for (let i = 0; i < 26; i++) {
-      const x0 = 8 + r() * (w - 16), lean = (r() - 0.5) * 22, top = 6 + r() * 22, k = 0.75 + r() * 0.25;
-      ctx.strokeStyle = `rgb(${200 * k},${165 * k},${70 * k})`; ctx.lineWidth = 1.6;
-      ctx.beginPath(); ctx.moveTo(x0, h); ctx.quadraticCurveTo(x0 + lean * 0.3, h * 0.5, x0 + lean, top + 8); ctx.stroke();
-      ctx.strokeStyle = `rgb(${244 * k},${208 * k},${100 * k})`; ctx.lineWidth = 3.2;
-      ctx.beginPath(); ctx.moveTo(x0 + lean, top + 12); ctx.lineTo(x0 + lean * 1.12, top); ctx.stroke();
-    }
-  }, false);
-}
-
-// vertical shading baked into vertex colours (dark underside, bright top)
-function shaded(g, lo, hi) {
-  g.computeBoundingBox();
-  const { min, max } = g.boundingBox, p = g.attributes.position, a = new Float32Array(p.count * 3);
-  for (let i = 0; i < p.count; i++) { const t = lerp(lo, hi, (p.getY(i) - min.y) / (max.y - min.y)); a[i * 3] = a[i * 3 + 1] = a[i * 3 + 2] = t; }
-  g.setAttribute('color', new THREE.BufferAttribute(a, 3));
-  return g;
-}
-
 export function createTerrain(scene) {
   const heights = new Float32Array((N + 1) * (N + 1));
   for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
@@ -244,11 +186,10 @@ export function createTerrain(scene) {
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, map: grassTexture() }));
+  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x92a244 }));   // replaced by the splat material from createFoliage
   mesh.receiveShadow = true;
   scene.add(mesh);
 
@@ -261,28 +202,6 @@ export function createTerrain(scene) {
   const rng = mulberry32(4242);
   const dummy = new THREE.Object3D();
   const colr = new THREE.Color();
-
-  // ---- worn road: draped ribbon with ruts and ragged edges
-  {
-    const SEG = 240, W = 5.2, ACR = 4, verts = [], uvs = [], ids = [];
-    for (let s = 0; s <= SEG; s++) {
-      const z = -HALF + (s / SEG) * MAP, cx = roadX(z);
-      for (let a = 0; a <= ACR; a++) {
-        const t = a / ACR, x = cx + (t - 0.5) * 2 * W;
-        verts.push(x, meshY(x, z) + 0.1, z); uvs.push(t, z / 20);
-      }
-    }
-    for (let s = 0; s < SEG; s++) for (let a = 0; a < ACR; a++) {
-      const p = s * (ACR + 1) + a, q = p + ACR + 1;
-      ids.push(p, q, p + 1, p + 1, q, q + 1);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    g.setIndex(ids); g.computeVertexNormals();
-    const road = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ map: roadTexture(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
-    road.receiveShadow = true; road.renderOrder = 1; scene.add(road);
-  }
 
   // ---- village: dense double row along the road, plus a ring of farmsteads
   const houses = [];
@@ -381,7 +300,7 @@ export function createTerrain(scene) {
       if (rng() < 0.55) stones.push({ x, z, yaw, c: 2 });
     }
   }
-  const stoneM = new THREE.InstancedMesh(wallGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), stones.length);
+  const stoneM = new THREE.InstancedMesh(stoneGeometry(), stoneMaterial(), stones.length);
   stones.forEach((w, i) => {
     const g = heightAt(w.x, w.z), L = 1.1 + rng() * 0.45, T = 0.7 + rng() * 0.25;
     const y = w.c === 0 ? 0.22 : w.c === 1 ? 0.62 : 0.93, hh = w.c === 0 ? 0.55 : w.c === 1 ? 0.4 : 0.22 + rng() * 0.12;
@@ -390,7 +309,7 @@ export function createTerrain(scene) {
     dummy.rotation.set((rng() - 0.5) * 0.12, w.yaw + (rng() - 0.5) * 0.25, (rng() - 0.5) * 0.1);
     dummy.scale.set(L, hh, T * (w.c === 2 ? 0.8 : 1)); dummy.updateMatrix();
     stoneM.setMatrixAt(i, dummy.matrix);
-    const v = 0.5 + rng() * 0.32, warm = rng();
+    const v = 0.72 + rng() * 0.4, warm = rng();
     stoneM.setColorAt(i, colr.setRGB(v * (0.96 + warm * 0.1), v * (0.92 + warm * 0.04), v * (0.8 + warm * 0.02)));
   });
   stoneM.castShadow = true; stoneM.receiveShadow = true; scene.add(stoneM);
@@ -424,7 +343,7 @@ export function createTerrain(scene) {
     for (const m of [pm, rm]) { m.castShadow = true; m.receiveShadow = true; scene.add(m); }
   }
 
-  // ---- trees (clustered deciduous + conifers), bushes, rocks
+  // ---- ground splat shader, grass, woods, hedges, bushes, rocks, wheat (see foliage.js)
   const treeOk = (x, z) => {
     if (Math.abs(x - roadX(z)) < 10) return false;
     if (Math.hypot(x - VILLAGE.x, z - VILLAGE.z) < 85) return false;
@@ -433,107 +352,9 @@ export function createTerrain(scene) {
     const ff = inField(x, z); if (Math.abs(ff.lx) < FIELD.w / 2 + 12 && Math.abs(ff.lz) < FIELD.d / 2 + 12) return false;
     return Math.abs(x) < HALF - 20 && Math.abs(z) < HALF - 20;
   };
-  const trees = [];
-  for (let a = 0; a < 16000 && trees.length < 1000; a++) {
-    const x = (rng() - 0.5) * (MAP - 40), z = (rng() - 0.5) * (MAP - 40);
-    const f = fbm(x * 0.009 + 55, z * 0.009 + 12, 3);
-    if (f < 0.56 && rng() > 0.012) continue;
-    if (!treeOk(x, z)) continue;
-    trees.push({ x, z, s: 0.75 + rng() * 0.8, cone: rng() < (f > 0.62 ? 0.45 : 0.15) });
-  }
-  for (let c = 0, made = 0; c < 400 && made < 22; c++) {   // small copses and hedgerow clumps
-    const cx = (rng() - 0.5) * (MAP - 80), cz = (rng() - 0.5) * (MAP - 80);
-    if (!treeOk(cx, cz)) continue;
-    made++;
-    const n = 6 + Math.floor(rng() * 10), mix = rng() < 0.3;
-    for (let i = 0; i < n; i++) {
-      const x = cx + (rng() - 0.5) * 36, z = cz + (rng() - 0.5) * 24;
-      if (treeOk(x, z)) trees.push({ x, z, s: 0.7 + rng() * 0.8, cone: mix && rng() < 0.6 });
-    }
-  }
-  const deci = trees.filter(t => !t.cone), cone = trees.filter(t => t.cone);
-  const lit = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
-  const trunk = new THREE.InstancedMesh(shaded(new THREE.CylinderGeometry(0.3, 0.55, 3.4, 6), 0.55, 1), lit, trees.length);
-  const blob = new THREE.InstancedMesh(shaded(new THREE.IcosahedronGeometry(1, 1), 0.55, 1.18), lit, deci.length * 3);
-  const conM = new THREE.InstancedMesh(shaded(new THREE.ConeGeometry(1, 1, 7), 0.5, 1.15), lit, Math.max(1, cone.length * 2));
-  let ti = 0, bi = 0, ci = 0;
-  const greens = [0x5a7c30, 0x6f8e34, 0x879a3a, 0x4a6c2c, 0xa09a3c, 0x78903a, 0xb08a34, 0x66863a];
-  const firs = [0x2f4e2c, 0x3a5a30, 0x2a4a36, 0x44602f];
-  for (const t of trees) {
-    const g = heightAt(t.x, t.z), th = t.cone ? 3 : 3.6;
-    dummy.position.set(t.x, g + 1.5 * t.s, t.z); dummy.rotation.set(0, rng() * 6, 0); dummy.scale.set(t.s, t.s * (th / 3.4), t.s); dummy.updateMatrix();
-    trunk.setMatrixAt(ti, dummy.matrix); trunk.setColorAt(ti++, colr.set(0x5a4430).multiplyScalar(0.8 + rng() * 0.4));
-    if (t.cone) {
-      const fcol = firs[Math.floor(rng() * firs.length)], hs = 1 + rng() * 0.4;
-      dummy.rotation.set(0, rng() * 6, 0);
-      dummy.position.set(t.x, g + (2.4 + 3.2) * t.s * hs, t.z); dummy.scale.set(2.5 * t.s, 7 * t.s * hs, 2.5 * t.s); dummy.updateMatrix();
-      conM.setMatrixAt(ci, dummy.matrix); conM.setColorAt(ci++, colr.set(fcol).multiplyScalar(0.9 + rng() * 0.25));
-      dummy.position.set(t.x, g + (2.4 + 7.4) * t.s * hs, t.z); dummy.scale.set(1.7 * t.s, 5 * t.s * hs, 1.7 * t.s); dummy.updateMatrix();
-      conM.setMatrixAt(ci, dummy.matrix); conM.setColorAt(ci++, colr.set(fcol).multiplyScalar(1.05 + rng() * 0.2));
-    } else {
-      const gc = greens[Math.floor(rng() * greens.length)], s = t.s;
-      const parts = [[0, 4.4, 0, 3.3, 2.7], [(rng() - 0.5) * 2.4, 5.6, (rng() - 0.5) * 2.4, 2.5, 2.2], [(rng() - 0.5) * 2.6, 3.9, (rng() - 0.5) * 2.6, 2.3, 1.9]];
-      parts.forEach(([dx, dy, dz, rx, ry], k) => {
-        dummy.rotation.set(rng(), rng() * 6, rng());
-        dummy.position.set(t.x + dx * s, g + dy * s + 1.0, t.z + dz * s); dummy.scale.set(rx * s, ry * s, rx * s); dummy.updateMatrix();
-        blob.setMatrixAt(bi, dummy.matrix); blob.setColorAt(bi++, colr.set(gc).multiplyScalar(k === 1 ? 1.12 : 0.92 + rng() * 0.12));
-      });
-    }
-  }
-  trunk.count = ti; blob.count = bi; conM.count = ci;
-  for (const m of [trunk, blob, conM]) { m.castShadow = true; m.receiveShadow = true; scene.add(m); }
-
-  {
-    const bushes = [], rocks = [];
-    for (let a = 0; a < 5000 && bushes.length < 520; a++) {
-      const cx = (rng() - 0.5) * (MAP - 60), cz = (rng() - 0.5) * (MAP - 60);
-      if (Math.abs(cx - roadX(cz)) < 8 || inField(cx, cz).inside || rng() > 0.35 + fbm(cx * 0.012 + 8, cz * 0.012 + 4, 2) * 0.3) continue;
-      for (let i = 0, n = 1 + Math.floor(rng() * 4); i < n; i++) bushes.push({ x: cx + (rng() - 0.5) * 5, z: cz + (rng() - 0.5) * 5, s: 0.7 + rng() * 0.9 });
-    }
-    for (let a = 0; a < 4000 && rocks.length < 260; a++) {
-      const x = (rng() - 0.5) * (MAP - 60), z = (rng() - 0.5) * (MAP - 60);
-      if (Math.abs(x - roadX(z)) < 7 || inField(x, z).inside || rng() > 0.1 + 2.5 * Math.hypot(heightAt(x + 3, z) - heightAt(x - 3, z), heightAt(x, z + 3) - heightAt(x, z - 3))) continue;
-      rocks.push({ x, z, s: 0.5 + rng() * rng() * 2.2 });
-    }
-    const bm = new THREE.InstancedMesh(shaded(new THREE.IcosahedronGeometry(1, 1), 0.55, 1.15), lit, bushes.length);
-    const rmM = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0xffffff }), rocks.length);
-    const bcols = [0x56742c, 0x6c8434, 0x7f8f38, 0x4c6a30, 0x8a8a3a];
-    bushes.forEach((b, i) => {
-      dummy.position.set(b.x, heightAt(b.x, b.z) + 0.35 * b.s, b.z); dummy.rotation.set(0, rng() * 6, 0); dummy.scale.set(1.3 * b.s, 0.9 * b.s, 1.3 * b.s); dummy.updateMatrix();
-      bm.setMatrixAt(i, dummy.matrix); bm.setColorAt(i, colr.set(bcols[Math.floor(rng() * bcols.length)]).multiplyScalar(0.85 + rng() * 0.3));
-    });
-    rocks.forEach((r, i) => {
-      dummy.position.set(r.x, heightAt(r.x, r.z) + 0.15 * r.s, r.z); dummy.rotation.set(rng() * 3, rng() * 6, rng() * 3); dummy.scale.set(r.s, r.s * (0.45 + rng() * 0.4), r.s * (0.7 + rng() * 0.5)); dummy.updateMatrix();
-      rmM.setMatrixAt(i, dummy.matrix); const v = 0.42 + rng() * 0.25; rmM.setColorAt(i, colr.setRGB(v * 1.02, v * 0.97, v * 0.88));
-    });
-    for (const m of [bm, rmM]) { m.castShadow = true; m.receiveShadow = true; scene.add(m); }
-  }
-
-  // ---- wheat: crossed alpha-cut cards, golden and tall enough to read as a crop
-  {
-    const card = (rot) => { const g = new THREE.PlaneGeometry(1.7, 1.35); g.translate(0, 0.62, 0); g.rotateY(rot); return g; };
-    const parts = [card(0), card(Math.PI / 3), card(-Math.PI / 3)];
-    let np = 0; for (const g of parts) np += g.attributes.position.count;
-    const geoW = new THREE.BufferGeometry(), pa = new Float32Array(np * 3), ua = new Float32Array(np * 2), na = new Float32Array(np * 3), ix = [];
-    let off = 0;
-    for (const g of parts) {
-      pa.set(g.attributes.position.array, off * 3); ua.set(g.attributes.uv.array, off * 2); na.set(g.attributes.normal.array, off * 3);
-      for (const k of g.index.array) ix.push(k + off);
-      off += g.attributes.position.count;
-    }
-    geoW.setAttribute('position', new THREE.BufferAttribute(pa, 3)); geoW.setAttribute('uv', new THREE.BufferAttribute(ua, 2)); geoW.setAttribute('normal', new THREE.BufferAttribute(na, 3)); geoW.setIndex(ix);
-    const rowsN = Math.floor(FIELD.d / 0.95), perRow = Math.floor(FIELD.w / 1.0);
-    const wheat = new THREE.InstancedMesh(geoW, new THREE.MeshLambertMaterial({ map: wheatTexture(), alphaTest: 0.5, side: THREE.DoubleSide }), rowsN * perRow);
-    let wi = 0;
-    for (let r = 0; r < rowsN; r++) for (let p = 0; p < perRow; p++) {
-      const lx = -FIELD.w / 2 + (p + 0.5) * 1.0 + (rng() - 0.5) * 0.7, lz = -FIELD.d / 2 + (r + 0.5) * 0.95 + (rng() - 0.5) * 0.5;
-      const x = FIELD.x + lx * fc - lz * fs, z = FIELD.z + lx * fs + lz * fc;
-      dummy.position.set(x, heightAt(x, z) - 0.05, z); dummy.rotation.set((rng() - 0.5) * 0.12, rng() * 6, (rng() - 0.5) * 0.12);
-      dummy.scale.set(0.9 + rng() * 0.3, 0.8 + rng() * 0.45, 0.9 + rng() * 0.3); dummy.updateMatrix();
-      wheat.setMatrixAt(wi, dummy.matrix); wheat.setColorAt(wi++, colr.set(0xe8c458).multiplyScalar(0.8 + rng() * 0.35 + 0.1 * Math.sin(lz * 0.8)));
-    }
-    wheat.count = wi; wheat.receiveShadow = true; scene.add(wheat);
-  }
+  const fol = createFoliage({ scene, heightAt, heights, N, CELL, MAP, HALF, FIELD, VILLAGE, fbm, roadX, inField, treeOk, houses, churchPos });
+  mesh.material = skirt.material = fol.groundMaterial;
+  mesh.onBeforeRender = (r, s, cam) => fol.update(cam);
 
   function minimapCanvas(size) {
     const cv = document.createElement('canvas'); cv.width = cv.height = size;

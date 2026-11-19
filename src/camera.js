@@ -5,15 +5,15 @@ import { HALF } from './terrain.js';
 export class RTSCamera {
   constructor(camera, terrain) {
     this.cam = camera; this.terrain = terrain;
-    this.s = { fx: 0, fz: 250, yaw: 0, dist: 260 };       // current
-    this.t = { fx: 0, fz: 250, yaw: 0, dist: 260 };       // target
-    this.minDist = 30; this.maxDist = 700;
+    this.s = { fx: 0, fz: 285, yaw: 0, dist: 180 };       // current
+    this.t = { fx: 0, fz: 285, yaw: 0, dist: 180 };       // target
+    this.minDist = 40; this.maxDist = 600;
     this.free = true;   // false while a script (intro) drives the camera
     this.apply();
   }
+  kFor(d) { return Math.min(1, Math.max(0, (d - this.minDist) / (this.maxDist - this.minDist))); }
   pitchFor(d) {
-    const k = Math.min(1, Math.max(0, (d - this.minDist) / (this.maxDist - this.minDist)));
-    return 0.42 + 0.627 * k;   // ~24 deg close, ~38 deg at default zoom (dist ~280), 60 deg at max zoom-out
+    return 0.314 + 0.733 * Math.pow(this.kFor(d), 0.6);   // 18 deg close (dist 40), ~36 deg at dist 180, 60 deg at max zoom-out (600)
   }
   get pitch() { return this.pitchFor(this.s.dist); }
   focusOn(x, z) { this.t.fx = x; this.t.fz = z; this.clamp(); }
@@ -29,7 +29,7 @@ export class RTSCamera {
       this.t.fz += (-cy * move.y - sy * move.x) * sp;
       this.t.yaw += rot * 1.6 * dt;
       this.clamp();
-      const k = 1 - Math.exp(-dt * 9);
+      const k = 1 - Math.exp(-dt * 7);
       for (const key of ['fx', 'fz', 'yaw', 'dist']) this.s[key] += (this.t[key] - this.s[key]) * k;
     }
     this.apply();
@@ -43,8 +43,9 @@ export class RTSCamera {
     const y = Math.max(fy + Math.sin(p) * dist, this.terrain.heightAt(x, z) + 4);
     this.cam.position.set(x, y, z);
     this.cam.lookAt(fx, fy, fz);
-    const k = Math.min(1, Math.max(0, (dist - this.minDist) / (this.maxDist - this.minDist)));
-    this.cam.rotateX(0.19 * (1 - k));   // tilt the view up a little so the horizon haze shows above the field
+    // tilt the view up so the horizon sits near the top of the screen (fov 46: half 0.40 rad); fades out toward top-down zoom
+    const k = this.kFor(dist), u = Math.min(1, Math.max(0, (k - 0.3) / 0.7)), fade = 1 - u * u * (3 - 2 * u);
+    this.cam.rotateX(Math.max(0, p - 0.32) * fade);
     this.cam.updateMatrixWorld();
   }
   // scripted placement (intro)

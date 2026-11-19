@@ -7,15 +7,15 @@ export const SCALE = 2.1;
 export const SIDE_COLOR = { player: '#b32a2a', enemy: '#2c4fa0' };
 
 export const TYPES = {
-  line: { id: 'line', name: 'Line Infantry', short: 'Line', men: 120, formation: 'grid', ranks: 3, sx: 1.3, sz: 1.5, kind: 'line',
+  line: { id: 'line', name: 'Line Infantry', short: 'Line', men: 160, formation: 'grid', ranks: 4, sx: 1.15, sz: 1.7, kind: 'line',
     walk: 3.6, run: 6, turn: 1.1, range: 150, reload: 8, acc: 0.13, arc: 0.8, fireFrac: 0.67, ma: 6, md: 6, charge: 0.1, morale: 85, frag: 1.5 },
   rifle: { id: 'rifle', name: 'Riflemen', short: 'Rifles', men: 60, formation: 'grid', ranks: 2, sx: 2.8, sz: 3.0, kind: 'rifle', loose: true,
     walk: 4.5, run: 7.5, turn: 1.8, range: 220, reload: 10, acc: 0.2, arc: 1.2, fireFrac: 1.0, ma: 3, md: 3, charge: 0.05, morale: 70, frag: 1.6, meleeMorale: 2 },
-  pike: { id: 'pike', name: 'Pike & Shot Tercio', short: 'Tercio', men: 200, formation: 'tercio', pikeFrac: 0.62, sx: 1.2, sz: 1.2, msx: 1.3, msz: 1.5,
+  pike: { id: 'pike', name: 'Pike & Shot Tercio', short: 'Tercio', men: 260, formation: 'tercio', pikeFrac: 0.62, sx: 1.15, sz: 1.35, msx: 1.15, msz: 1.6,
     walk: 2.8, run: 4.5, turn: 0.7, range: 110, reload: 11, acc: 0.11, arc: 1.0, fireFrac: 1.0, ma: 7, md: 9, charge: 0.05, antiCav: true, morale: 90, frag: 1.2 },
-  lcav: { id: 'lcav', name: 'Light Cavalry', short: 'Hussars', men: 50, formation: 'grid', ranks: 2, sx: 2.0, sz: 3.2, kind: 'lrider', cav: true, caracole: true,
+  lcav: { id: 'lcav', name: 'Light Cavalry', short: 'Hussars', men: 60, formation: 'grid', ranks: 3, sx: 1.6, sz: 3.4, kind: 'lrider', cav: true, caracole: true,
     walk: 7, run: 14, turn: 2.5, range: 45, reload: 9, acc: 0.16, arc: 1.0, fireFrac: 0.8, ma: 6, md: 4, charge: 0.35, morale: 75, frag: 1.5 },
-  hcav: { id: 'hcav', name: 'Heavy Cavalry (Lancers)', short: 'Lancers', men: 40, formation: 'grid', ranks: 2, sx: 2.3, sz: 3.6, kind: 'hrider', cav: true,
+  hcav: { id: 'hcav', name: 'Heavy Cavalry (Lancers)', short: 'Lancers', men: 48, formation: 'grid', ranks: 3, sx: 1.75, sz: 3.7, kind: 'hrider', cav: true,
     walk: 6, run: 13, turn: 1.7, range: 0, reload: 0, acc: 0, arc: 0, fireFrac: 0, ma: 4.5, md: 6, charge: 0.9, morale: 85, frag: 1.3 },
   artillery: { id: 'artillery', name: 'Artillery Battery', short: 'Guns', men: 20, formation: 'battery', guns: 4, kind: 'crew',
     walk: 1.8, run: 2.5, turn: 0.6, range: 320, canister: 60, reload: 12, acc: 0, arc: 0.6, fireFrac: 0, ma: 1.5, md: 1, charge: 0, morale: 90, frag: 0.6, deploy: 4 },
@@ -224,17 +224,28 @@ export class UnitRenderer {
       if (d.cav) for (let i = 0; i < 3; i++) add(`horse${i}`, r.maxMen);
       if (d.formation === 'battery') add('cannon', d.guns);
     }
-    for (const side of ['player', 'enemy']) { add(`${side}_hrider`, 1); for (let i = 0; i < 3; i++) add(`horse${i}`, 2); }
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
-    const make = (key, geo) => {
-      const m = new THREE.InstancedMesh(geo, mat, Math.max(1, cap[key] || 1));
+    for (const side of ['player', 'enemy']) { add(`${side}_officer`, 1); for (let i = 0; i < 3; i++) add(`horse${i}`, 2); }
+    this.uTime = models.uTime;
+    // one hi + one lo (key@lo) InstancedMesh per figure type; GPU pose shader reads the per-instance iAnim attribute
+    const make = (key, geo, mk) => {
+      const n = Math.max(1, cap[key.replace('@lo', '')] || 1), g = geo.clone();
+      const ia = new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4); ia.setUsage(THREE.DynamicDrawUsage);
+      g.setAttribute('iAnim', ia);
+      const m = new THREE.InstancedMesh(g, models.mats[mk].mat, n);
+      m.customDepthMaterial = models.mats[mk].depth;
       m.count = 0; m.frustumCulled = false; m.castShadow = true; m.receiveShadow = false;
-      m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(m.instanceMatrix.count * 3).fill(1), 3);
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(n * 3).fill(1), 3);
+      m.iAnim = ia;
       this.meshes[key] = m; scene.add(m);
     };
-    for (const side of ['player', 'enemy']) for (const k of Object.keys(models.soldier[side])) make(`${side}_${k}`, models.soldier[side][k]);
-    models.horse.forEach((g, i) => make(`horse${i}`, g));
-    make('cannon', models.cannon);
+    const matKind = (k) => /rider|officer/.test(k) ? 'rider' : 'infantry';
+    for (const side of ['player', 'enemy']) for (const k of Object.keys(models.soldier[side])) {
+      make(`${side}_${k}`, models.soldier[side][k], matKind(k));
+      if (models.lod.soldier[side][k]) make(`${side}_${k}@lo`, models.lod.soldier[side][k], matKind(k));
+    }
+    models.horse.forEach((g, i) => { make(`horse${i}`, g, 'horse'); make(`horse${i}@lo`, models.lod.horse[i], 'horse'); });
+    make('cannon', models.cannon, 'cannon');
     this.bannerGroup = new THREE.Group(); scene.add(this.bannerGroup);
     this.ringGroup = new THREE.Group(); scene.add(this.ringGroup);
     for (const r of world.regs) this.attach(r);
@@ -245,9 +256,11 @@ export class UnitRenderer {
     r.ring = new Ring(0xe8c860, 0.9); r.targetRing = new Ring(0xd03030, 0.8); r.destRing = new Ring(0xe8c860, 0.4);
     for (const g of [r.ring, r.targetRing, r.destRing]) this.ringGroup.add(g.mesh);
   }
-  put(key, x, y, z, yaw, s, v = 1) {
+  // a0..a3 -> iAnim: walk cycle (rad), gait (speed / walk speed), aim/charge pose 0..1, recoil 0..1
+  put(key, x, y, z, yaw, s, v = 1, a0 = 0, a1 = 0, a2 = 0, a3 = 0) {
     const m = this.meshes[key]; const i = m.count;
     if (i >= m.instanceMatrix.count) return;
+    const ia = m.iAnim.array, q = i * 4; ia[q] = a0; ia[q + 1] = a1; ia[q + 2] = a2; ia[q + 3] = a3;
     const a = m.instanceMatrix.array, o = i * 16, c = Math.cos(yaw) * s, sn = Math.sin(yaw) * s;
     a[o] = c; a[o + 1] = 0; a[o + 2] = -sn; a[o + 3] = 0;
     a[o + 4] = 0; a[o + 5] = s; a[o + 6] = 0; a[o + 7] = 0;
@@ -258,21 +271,43 @@ export class UnitRenderer {
   }
   update(time, camera, camDist) {
     const w = this.world, th = w.terrain;
+    const dt = this.lastT === undefined ? 0 : Math.min(0.1, Math.max(0, time - this.lastT)); this.lastT = time;
+    if (this.uTime) this.uTime.value = time;
     for (const k in this.meshes) this.meshes[k].count = 0;
-    const draw = (side, kind, s, yTop) => { };
+    const TAU = Math.PI * 2, kA = Math.min(1, dt * 5);
+    const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z, LOD2 = 230 * 230;
     for (const r of w.regs) {
       if (r.state === 'gone') continue;
-      const d = r.def, cav = !!d.cav;
+      const d = r.def, cav = !!d.cav, routing = r.state === 'routing', tercio = d.formation === 'tercio';
+      // volley detection (reload timer jumps up) drives the per-figure recoil and the gun recoil below
+      if (r._rl !== undefined && r.reloadT > r._rl + 0.5) r._ft = time;
+      r._rl = r.reloadT;
+      const since = r._ft === undefined ? 99 : time - r._ft;
+      const melee = !routing && (r.engaged > 0 || (r.order.type === 'attack' && (r.run || d.range === 0) && r.moving));
+      const ready = !routing && d.range > 0 && r.fireAtWill && !!r.aimTarget && r.canShoot && !r.moving && r.engaged === 0 && r.reloadT < 2;
+      const at = r.aimTarget;
+      const pikeDown = melee || (!routing && !!at && at.state !== 'gone' && Math.hypot(at.x - r.x, at.z - r.z) < 70);
+      const kMain = `${r.side}_${d.kind}`, kPike = `${r.side}_pike`, kMusk = `${r.side}_musk`;
       for (const s of r.soldiers) {
+        const kind = tercio ? s.role : d.kind;
+        const sp = s.mv ? (routing ? d.run : Math.max(r.speedNow, d.walk * 0.85)) : 0, gt = sp / d.walk;
+        s._g = s._g === undefined ? gt : s._g + (gt - s._g) * kA;
+        s._c = ((s._c === undefined ? s.phase : s._c) + dt * TAU * (cav ? 0.75 + 0.45 * s._g : 0.95 * s._g)) % (TAU * 1000);
+        let aim = 0, rec = 0;
+        if (cav) aim = melee ? 1 : 0;
+        else if (kind === 'pike') aim = pikeDown ? 1 : 0;
+        else if (kind !== 'crew' && !routing) {
+          const stag = (s.phase % 1) * 0.9, tf = since - stag;   // shots ripple along the line
+          aim = ready || since < stag + 0.7 ? 1 : 0;
+          if (tf >= 0 && tf < 0.45) rec = 1 - tf / 0.45;
+        }
+        s._a = s._a === undefined ? aim : s._a + (aim - s._a) * kA;
         const y = th.heightAt(s.x, s.z);
-        const bob = s.mv ? Math.abs(Math.sin(time * 9 + s.phase)) * (cav ? 0.18 : 0.1) : Math.sin(time * 0.8 + s.phase) * 0.01;
+        const ex = s.x - cx, ey = y - cy, ez = s.z - cz, lo = ex * ex + ey * ey + ez * ez > LOD2 ? '@lo' : '';
         const v = 0.86 + (s.phase % 1) * 0.28;   // per-figure tone variation
-        let kind = d.kind;
-        if (d.formation === 'tercio') kind = s.role;
-        if (cav) {
-          this.put(`horse${s.hv}`, s.x, y + bob, s.z, s.yaw, SCALE, v);
-          this.put(`${r.side}_${kind}`, s.x, y + bob + 1.3 * SCALE, s.z, s.yaw, SCALE, v);
-        } else this.put(`${r.side}_${kind}`, s.x, y + bob * SCALE, s.z, s.yaw, SCALE, v);
+        const key = (tercio ? (kind === 'pike' ? kPike : kMusk) : kMain) + lo;
+        if (cav) this.put(`horse${s.hv}${lo}`, s.x, y, s.z, s.yaw, SCALE, v, s._c, s._g, s._a, 0);
+        this.put(key, s.x, y, s.z, s.yaw, SCALE, v, s._c, s._g, s._a, rec);
       }
       if (d.formation === 'battery') {
         const c = Math.cos(r.facing), sn = Math.sin(r.facing), g = r.layout.guns;
@@ -281,16 +316,26 @@ export class UnitRenderer {
           const gx = r.x + c * lx + sn * lz, gz = r.z - sn * lx + c * lz;
           r.layout.gunWorld = r.layout.gunWorld || [];
           r.layout.gunWorld[i] = [gx, gz];
-          this.put('cannon', gx, th.heightAt(gx, gz), gz, r.facing, SCALE * 1.15);
+          const t = since - i * 0.35 - 0.3, rec = t >= 0 && t < 0.9 ? (1 - t / 0.9) ** 2 : 0;
+          this.put('cannon', gx, th.heightAt(gx, gz), gz, r.facing, SCALE * 1.15, 1, 0, 0, 0, rec);
         }
       }
     }
     for (const gn of w.generals) {
       const y = th.heightAt(gn.x, gn.z);
-      this.put(`horse1`, gn.x, y, gn.z, gn.facing, SCALE * 1.05);
-      this.put(`${gn.side}_hrider`, gn.x, y + 1.3 * SCALE * 1.05, gn.z, gn.facing, SCALE * 1.05);
+      const sp = gn._px === undefined || dt <= 0 ? 0 : Math.hypot(gn.x - gn._px, gn.z - gn._pz) / dt;
+      gn._px = gn.x; gn._pz = gn.z;
+      const gt = sp > 0.3 ? sp / 5 : 0;
+      gn._g = gn._g === undefined ? 0 : gn._g + (gt - gn._g) * kA;
+      gn._c = ((gn._c || 0) + dt * TAU * (0.75 + 0.45 * gn._g)) % (TAU * 1000);
+      this.put('horse1', gn.x, y, gn.z, gn.facing, SCALE * 1.05, 1, gn._c, gn._g, 0, 0);
+      this.put(`${gn.side}_officer`, gn.x, y, gn.z, gn.facing, SCALE * 1.05, 1, gn._c, gn._g, 0, 0);
     }
-    for (const k in this.meshes) { this.meshes[k].instanceMatrix.needsUpdate = true; this.meshes[k].instanceColor.needsUpdate = true; }
+    const upd = (a, n, c) => { a.clearUpdateRanges(); a.addUpdateRange(0, c * n); a.needsUpdate = true; };
+    for (const k in this.meshes) {
+      const m = this.meshes[k]; m.visible = m.count > 0;
+      if (m.count) { upd(m.instanceMatrix, 16, m.count); upd(m.instanceColor, 3, m.count); upd(m.iAnim, 4, m.count); }
+    }
 
     // banners & rings
     const sel = w.selection;
