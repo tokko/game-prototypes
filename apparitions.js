@@ -16,7 +16,10 @@ const V3 = THREE.Vector3;
 // Apparition tuning (looks and timing of the shows themselves).
 const CREATURE_BEAT = 1.4;      // s after being noticed before the eyes start to curve
 const CREATURE_MORPH = 4.5;     // s for the eyes to go from round glows to crescents (counts only while observed)
-const FIGURE_STEP = 1.6;        // m the distant figure moves toward the player when it "changes"
+const FIGURE_STEP = 1.6;        // m a non-doorway figure moves toward the player when it "changes" (at the door it stands up instead)
+const CREATURE_EDGE = 0.42;     // m: half-width of the cover stone as seen from the path (where the paw grips)
+const CREATURE_LAT = CREATURE_EDGE + 0.43; // m the beast plane's centre sits beside the cover's centre (its edge hides the plane's left 0.22 m)
+const CREATURE_DEPTH = 0.55;    // m the beast plane sits behind the cover's centre, along the view
 const STEPS_ECHO_COUNT = 7;     // follower steps that echo the player's own before drifting out of sync
 const STEPS_START_DIST = 11;    // m behind the player
 const STEPS_CLOSE_RATE = 1.15;  // m/s while closing in (player walks 1.3)
@@ -190,12 +193,14 @@ export function createApparitions(game, host) {
 
   // ---- 2. pale woman behind a window pane --------------------------------------------------------
   const woman = (() => {
-    const m = mat(T.womanTex(), { opacity: 0.9 });
+    const maps = [T.apparitionTex('woman_far'), T.apparitionTex('woman_near')];   // per stage; the near one has the hand on the pane
+    const m = mat(maps[0], { opacity: 0.9 });
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.99), m); mesh.renderOrder = 1; mesh.visible = false; scene.add(mesh);
     const stages = [{ s: 1.0, dy: -0.2, rz: 0, op: 0.9 }, { s: 1.18, dy: -0.12, rz: 0.04, op: 1.0 }]; // [far from the glass, close to it]
     let anchor = null, st = 0;
     const apply = () => {
       const o = stages[st];
+      m.map = maps[st];
       mesh.position.copy(anchor.interior); mesh.position.y += o.dy; mesh.scale.setScalar(o.s); m.opacity = o.op;
       mesh.quaternion.copy(q); mesh.rotateZ(o.rz);
     };
@@ -210,35 +215,40 @@ export function createApparitions(game, host) {
   })();
 
   // ---- 3. shadow creature half behind stone or foliage -------------------------------------------
+  // Painted for a cover on its LEFT (assets/apparitions/SPEC.md): the plane sits behind the cover, offset sideways so the cover's
+  // edge hides the plane's left 0.2 m; with the cover on the other side the whole group is mirrored (scale.x = -1). It is re-seated
+  // from the camera's view of the cover every frame, so the cover keeps occluding it while the billboard turns.
   const creature = (() => {
     const grp = new THREE.Group(); grp.visible = false;
-    const body = new THREE.Mesh(new THREE.PlaneGeometry(1.25, 2.3), mat(T.creatureTex(), { opacity: 1 })); body.position.y = 1.18;
+    const body = new THREE.Mesh(new THREE.PlaneGeometry(1.30, 2.60), mat(T.apparitionTex('beast_body'), { opacity: 1 })); body.position.y = 1.30;
+    const hand = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5), mat(T.apparitionTex('beast_hand'), { opacity: 1 }));
+    hand.position.set(CREATURE_EDGE - CREATURE_LAT - 0.25, 1.25, CREATURE_DEPTH + 0.8); hand.renderOrder = 1;   // right edge on the stone's edge, just in front of its face
     const E = T.eyesTex();
     const em = mat(E.tex, { blending: THREE.AdditiveBlending, fog: false, opacity: 0 });
-    const eyes = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.45), em); eyes.position.set(0, 1.7, 0.03); eyes.renderOrder = 2;
-    grp.add(body, eyes); scene.add(grp);
-    let hold = 0, isNoticed = false, step = -1;
-    const place = (a) => { // half behind the cover: just beyond its far edge as seen from the path, so the stone hides about half of it
-      const p = P.pointAt(a.s), side = a.side === 'left' ? -1 : 1;
-      return new V3(a.pos.x + p.tx * 0.6 - side * p.rx * 0.55, 0, a.pos.z + p.tz * 0.6 - side * p.rz * 0.55);
+    const eyes = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.45), em); eyes.position.set(0.09, 1.70, 0.03); eyes.rotation.z = -0.21; eyes.renderOrder = 2;   // on the skull
+    grp.add(body, hand, eyes); scene.add(grp);
+    let hold = 0, isNoticed = false, step = -1, cover = null;
+    const seat = (a, out) => { // behind the cover, offset toward the path side
+      const dx = a.pos.x - camera.position.x, dz = a.pos.z - camera.position.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d;
+      const mir = a.side === 'left' ? 1 : -1;   // painted cover side is left, so a left-side cover needs no mirror
+      return out.set(a.pos.x - uz * CREATURE_LAT * mir + ux * CREATURE_DEPTH, 0, a.pos.z + ux * CREATURE_LAT * mir + uz * CREATURE_DEPTH);
     };
+    const place = () => { grp.scale.x = cover.side === 'left' ? 1 : -1; hand.visible = cover.kind === 'stone'; seat(cover, grp.position); faceCamera(grp); };
+    const light = (lit, d) => { body.material.opacity = lit; hand.material.opacity = lit; em.opacity = clamp(fogTr(d) * 3, 0, 1) * lit; };
     return {
       name: 'forest-shadow', fogK: 1, minDist: 9, maxDwell: 7.5, maxChanges: 0, point: new V3(), lamp: null,
-      pointFor: (a) => place(a).setY(1.3),
+      pointFor: (a) => seat(a, new V3()).setY(1.3),
       spawn(a, lamp) {
-        grp.position.copy(place(a)); this.point.copy(grp.position).setY(1.3); hold = 0; isNoticed = false; step = -1; E.draw(0); this.lamp = lamp;
-        const lit = clamp(lamp ? lamp.flicker : 1, 0, 1);   // the first rendered frame already honours a flicker
-        body.material.opacity = lit; em.opacity = clamp(fogTr(grp.position.distanceTo(camera.position)) * 3, 0, 1) * lit;
-        grp.visible = true; faceCamera(grp);
+        cover = a; place(); this.point.copy(grp.position).setY(1.3); hold = 0; isNoticed = false; step = -1; E.draw(0); this.lamp = lamp;
+        light(clamp(lamp ? lamp.flicker : 1, 0, 1), grp.position.distanceTo(camera.position));   // the first rendered frame already honours a flicker
+        grp.visible = true;
       },
       change: () => false,
       vanish() { grp.visible = false; },
       noticed() { isNoticed = true; },
       update(dt, { observed }) {
-        faceCamera(grp);
-        const d = grp.position.distanceTo(camera.position);
-        const lit = clamp(this.lamp ? this.lamp.flicker : 1, 0, 1);   // like the figure: dark while its lamp flickers
-        body.material.opacity = lit; em.opacity = clamp(fogTr(d) * 3, 0, 1) * lit;
+        place();
+        light(clamp(this.lamp ? this.lamp.flicker : 1, 0, 1), grp.position.distanceTo(camera.position));   // like the figure: dark while its lamp flickers
         if (!isNoticed || !observed) return; // it holds still; the smile only advances while it is being watched
         hold += dt;
         const m = clamp((hold - CREATURE_BEAT) / CREATURE_MORPH, 0, 1), k = Math.round(m * 32);
@@ -247,23 +257,41 @@ export function createApparitions(game, host) {
     };
   })();
 
-  // ---- 4. distant figure at the edge of the light ------------------------------------------------
+  // ---- 4. the tall one: distant figure at the edge of the light ---------------------------------
+  // Doorway anchor: figure_lean parallel to the facade behind the left jamb, plus a hand on the frame post; change() swaps to
+  // figure_stand in the opening. Other anchors (corridor, village ends): figure_stand billboarded, change() steps closer.
   const figure = (() => {
-    const grp = new THREE.Group(); grp.visible = false;
-    const m = mat(T.figureTex(), { opacity: 0.95 });
-    const body = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 2.5), m); body.position.y = 1.25; grp.add(body); scene.add(grp);
+    const grp = new THREE.Group(); grp.visible = false;   // the door-frame pose: local x right, z toward the court
+    const sg = new THREE.Group(); sg.visible = false;     // the billboarded stand pose
+    const mk = (name, w, h) => { const o = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat(T.apparitionTex(name), { opacity: 0.95 })); o.visible = false; return o; };
+    const lean = mk('figure_lean', 1.4, 2.8), post = mk('figure_hand', 0.4, 0.4), stand = mk('figure_stand', 1.4, 2.8);
+    lean.position.set(-0.85, 1.4, -0.65);   // left edge x = -1.55 behind the jamb (inner edge -1.40), just inside the wall
+    post.position.set(-1.6, 2.0, 0.29); post.renderOrder = 1;   // right edge on the post's inner edge, on its front face
+    stand.position.y = 1.4;
+    grp.add(lean, post); sg.add(stand); scene.add(grp, sg);
+    let isDoor = false, standing = true;
+    const inDoor = (a, x, y, z) => { const p = P.pointAt(a.s); return new V3(p.x + p.rx * x - p.tx * z, y, p.z + p.rz * x - p.tz * z); };   // door-frame local -> world
+    const pose = () => { lean.visible = post.visible = isDoor && !standing; stand.visible = sg.visible = standing; };
     return {
       name: 'distant-figure', fogK: 1, minDist: 11, maxDwell: 4, maxChanges: 1, point: new V3(), lamp: null,
-      pointFor: (a) => a.pos.clone().setY(1.0),
-      spawn(a, lamp) { grp.position.copy(a.pos); grp.position.y = 0; this.lamp = lamp; this.point.copy(a.pos).setY(1.0); m.opacity = 0.95 * clamp(lamp ? lamp.flicker : 1, 0, 1); grp.visible = true; faceCamera(grp); },
+      pointFor: (a) => (a.kind === 'door' ? inDoor(a, -0.85, 1.5, -0.65) : a.pos.clone().setY(1.5)),
+      spawn(a, lamp) {
+        isDoor = a.kind === 'door'; standing = !isDoor; this.lamp = lamp;
+        if (isDoor) { const p = P.pointAt(a.s); grp.position.set(p.x, 0, p.z); grp.rotation.y = Math.atan2(-p.tx, -p.tz); }
+        sg.position.copy(a.pos); sg.position.y = 0;
+        stand.material.color.setHex(isDoor ? 0x9098a8 : 0xffffff);   // backlit in the doorway the stand pose reads too lit
+        this.point.copy(this.pointFor(a)); pose(); grp.visible = true; faceCamera(sg); this.light();
+      },
+      light() { const o = 0.95 * clamp(this.lamp ? this.lamp.flicker : 1, 0, 1); lean.material.opacity = post.material.opacity = stand.material.opacity = o; },
       change() {
-        const dx = camera.position.x - grp.position.x, dz = camera.position.z - grp.position.z, d = Math.hypot(dx, dz) || 1;
-        grp.position.x += (dx / d) * FIGURE_STEP; grp.position.z += (dz / d) * FIGURE_STEP; this.point.copy(grp.position).setY(1.0);
+        if (isDoor) { standing = true; pose(); this.point.copy(sg.position).setY(1.5); return true; }
+        const dx = camera.position.x - sg.position.x, dz = camera.position.z - sg.position.z, d = Math.hypot(dx, dz) || 1;
+        sg.position.x += (dx / d) * FIGURE_STEP; sg.position.z += (dz / d) * FIGURE_STEP; this.point.copy(sg.position).setY(1.5);
         return true;
       },
-      vanish() { grp.visible = false; },
+      vanish() { grp.visible = false; sg.visible = false; },
       noticed() {},
-      update() { faceCamera(grp); m.opacity = 0.95 * clamp(this.lamp ? this.lamp.flicker : 1, 0, 1); },
+      update() { faceCamera(sg); this.light(); },
     };
   })();
 
