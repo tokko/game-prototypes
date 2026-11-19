@@ -245,15 +245,32 @@ export function streak() {
 
 // Painted PNGs from assets/apparitions/ (see SPEC.md there): straight alpha, sRGB, clamp wrap, mipmaps.
 const apparitionCache = {};
-export function apparitionTex(name) {
-  if (!apparitionCache[name]) {
-    const t = new THREE.TextureLoader().load(`assets/apparitions/${name}.png`);
+export function apparitionTex(name, dir = 'apparitions') {
+  const key = `${dir}/${name}`;
+  if (!apparitionCache[key]) {
+    const t = new THREE.TextureLoader().load(`assets/${key}.png`);
     t.colorSpace = THREE.SRGBColorSpace;
     t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
     t.anisotropy = 4;
-    apparitionCache[name] = t;
+    apparitionCache[key] = t;
   }
-  return apparitionCache[name];
+  return apparitionCache[key];
+}
+
+// The dim inside of the open lodge window (the sobbing woman sits in front of it): back wall, a floor line, a cold patch.
+export function roomTex() {
+  return canvasTex(128, 128, (ctx, w, h) => {
+    const r = rng(77);
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, '#0a0c10'); g.addColorStop(0.55, '#14171c'); g.addColorStop(0.7, '#1d1a18'); g.addColorStop(1, '#0d0b0a');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    const p = ctx.createRadialGradient(w * 0.6, h * 0.35, 2, w * 0.6, h * 0.35, w * 0.5);
+    p.addColorStop(0, 'rgba(70,82,98,0.32)'); p.addColorStop(1, 'rgba(70,82,98,0)');
+    ctx.fillStyle = p; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = 'rgba(40,34,30,0.7)'; ctx.lineWidth = 1;
+    for (let i = 0; i < 6; i++) { const y = h * (0.7 + i * 0.05); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+    speckle(ctx, w, h, r, 200, 10, 40, 2, [1, 1, 1.1], 0.4);
+  });
 }
 
 // Pair of luminous eyes. draw(m): m = 0 round glows, m = 1 upward-bowed crescents (a smile).

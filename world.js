@@ -70,7 +70,7 @@ const unitHip = new THREE.ConeGeometry(1, 1, 4).rotateY(Math.PI / 4).translate(0
 export function buildWorld(scene) {
   const rand = T.rng(1337);
   const S1 = P.GATES[0], S2 = P.GATES[1], PL = P.PLACES;
-  const anchors = { windows: [], covers: [], ends: [] };
+  const anchors = { windows: [], covers: [], ends: [], corners: [] };
   const lamps = [];
   const sway = [];   // per-frame animators (t, cam, dt): laundry, lantern, doors
   const toggles = {}; // switchable props for the director: shrineCandle, landingLamp, corridorDoor, sideDoor
@@ -123,6 +123,7 @@ export function buildWorld(scene) {
     lampHead: new THREE.MeshBasicMaterial({ color: 0xffc27a }),
     lampOff: std({ color: 0x2c2216, roughness: 0.6 }),
     litWindow: new THREE.MeshBasicMaterial({ map: T.windowTex('lit'), fog: false, transparent: true }),
+    room: new THREE.MeshBasicMaterial({ map: T.roomTex() }),   // the dim inside of the open lodge window
   };
   const glowTex = T.glow(), streakTex = T.streak();
   const addMat = (tex, op) => new THREE.MeshBasicMaterial({ map: tex, color: AMBER, transparent: true, opacity: op, blending: THREE.AdditiveBlending, depthWrite: false });
@@ -230,20 +231,26 @@ export function buildWorld(scene) {
   }
 
   // ---- windows and houses ---------------------------------------------------------------
-  function anchorWindow(id, zone, base, lx, ly, lz) {
+  // `open` (the lodge): the lower sash is pushed up, so only the upper half is glazed; behind the open gap is a dim room
+  // (a painted backing, the sobbing woman's billboard is hung in the group in front of it) and half a curtain.
+  function anchorWindow(id, zone, base, lx, ly, lz, open = false) {
     const g = new THREE.Group(); g.matrixAutoUpdate = false; g.matrix.copy(base).multiply(mx(lx, ly, lz));
-    const curtain = new THREE.Mesh(new THREE.PlaneGeometry(0.84, 1.24), M.curtain); curtain.position.z = 0.03;
-    const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.3), M.glass); glass.position.z = 0.09; glass.renderOrder = 2;
+    const curtain = new THREE.Mesh(new THREE.PlaneGeometry(0.84, 1.24), open ? M.room : M.curtain); curtain.position.z = 0.03;
+    const glass = new THREE.Mesh(open ? new THREE.PlaneGeometry(0.9, 0.42) : new THREE.PlaneGeometry(0.9, 1.3), M.glass); glass.position.set(0, open ? 0.44 : 0, 0.09); glass.renderOrder = 2;
     g.add(curtain, glass);
-    const fr = (w, h, x, y) => { const m = new THREE.Mesh(box(w, h, 0.14), M.frame); m.position.set(x, y, 0.07); g.add(m); };
-    fr(1.12, 0.1, 0, 0.7); fr(1.12, 0.1, 0, -0.7); fr(0.1, 1.5, -0.51, 0); fr(0.1, 1.5, 0.51, 0); fr(0.04, 1.3, 0, 0);
+    const fr = (w, h, x, y, z = 0.07, d = 0.14) => { const m = new THREE.Mesh(box(w, h, d), M.frame); m.position.set(x, y, z); g.add(m); };
+    fr(1.12, 0.1, 0, 0.7); fr(1.12, 0.1, 0, -0.7); fr(0.1, 1.5, -0.51, 0); fr(0.1, 1.5, 0.51, 0);
+    if (open) {
+      fr(0.04, 0.42, 0, 0.44); fr(0.92, 0.07, 0, 0.22, 0.1, 0.06);   // the raised sash's bottom rail, up in the top third
+      const half = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 1.2), M.curtain); half.position.set(-0.27, 0, 0.05); g.add(half);
+    } else fr(0.04, 1.3, 0, 0);
     const sill = new THREE.Mesh(box(1.3, 0.08, 0.3), M.frame); sill.position.set(0, -0.78, 0.15); g.add(sill);
     scene.add(g);
     const pos = V(lx, ly, lz + 0.09).applyMatrix4(base), normal = V(0, 0, 1).transformDirection(base);
     anchors.windows.push({
       id, zone, pos, normal,
       interior: pos.clone().addScaledVector(normal, -0.03), // between curtain and glass
-      width: 0.9, height: 1.3, glass, curtain,
+      width: 0.9, height: 1.3, glass, curtain, group: g, reserved: open,   // reserved: a beat owns it, random events skip it
       s: P.clampToPath(pos.x, pos.z).s,
     });
   }
@@ -303,7 +310,7 @@ export function buildWorld(scene) {
   // approaching player (so an anchor window is not seen edge-on). Footprint stays outside the walkable width.
   function house(o) {
     const { s, side, w = 8, d = 7, h = 5, rise = 2.4, kind = 'gable', wall = M.plaster, roof = M.slate, gap = 0.6, turn = 0,
-      anchor = null, zone = 'village', boards = [], door = 'closed', jet = 0, lean = 0, holes = 0, shutters = 0.35, chimney = true } = o;
+      anchor = null, zone = 'village', boards = [], door = 'closed', jet = 0, lean = 0, holes = 0, shutters = 0.35, chimney = true, anchorY = 1.9, openWindow = false } = o;
     const latHalf = (d / 2) * Math.cos(turn) + (w / 2) * Math.sin(turn);
     const cx = side * (hwMax(s, Math.ceil(w / 2 + 1.5)) + gap + latHalf);
     const hb = frame(s).multiply(mx(cx, 0, 0, -side * (Math.PI / 2 - turn), 1, 1, 1, 0, lean));
@@ -333,7 +340,7 @@ export function buildWorld(scene) {
     const anchorI = xs.findIndex((_, i) => i !== doorI);
     xs.forEach((x, i) => {
       if (i === doorI) return;
-      if (anchor && i === anchorI) anchorWindow(anchor, zone, hb, x, 1.9, fz); else win(`g${i}`, x, winY, fz + 0.02);
+      if (anchor && i === anchorI) anchorWindow(anchor, zone, hb, x, anchorY, fz, openWindow); else win(`g${i}`, x, winY, fz + 0.02);
     });
     const hU = jet ? lower + (h - lower) / 2 : h - 1.5;
     if (h >= 5 || jet) xs.forEach((x, i) => win(`u${i}`, x, hU, fzU + 0.02));
@@ -688,7 +695,7 @@ export function buildWorld(scene) {
     const c = lat(s, side, 11 + rand() * 32); tree(c.x, c.z, true);
   }
   for (let i = 0; i < 40; i++) { const c = lat(S2 + rand() * (DS - S2), rand() < 0.5 ? -1 : 1, 11 + rand() * 25); bush(c.x, c.z, 0.7 + rand() * 0.8); }
-  house({ s: PL['estate-lodge'].s, side: -1, w: 6, d: 5, h: 3.6, rise: 1.8, kind: 'gable', wall: M.plasterC, roof: M.slate, anchor: 'estate-window-lodge', zone: 'estate', turn: 0.6, gap: 0.7 });
+  house({ s: PL['estate-lodge'].s, side: -1, w: 6, d: 5, h: 3.6, rise: 1.8, kind: 'gable', wall: M.plasterC, roof: M.slate, anchor: 'estate-window-lodge', zone: 'estate', turn: 0.6, gap: 0.7, anchorY: 1.45, openWindow: true });
 
   { // courtyard: walls, dead fountain off-centre, a dead tree, a wall lantern
     const c0 = PL['estate-courtyard'].s - 13, c1 = DS - 0.5, f = at(PL['estate-courtyard'].s);
@@ -776,6 +783,8 @@ export function buildWorld(scene) {
     f(box(0.2, 0.3, 0.2), M.iron, -3.0, 3.28, -(lz + 1.4));
     landingHead = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.2, 0.16), M.lampOff); landingHead.position.copy(world(frame(DS), -3.0, 3.5, -(lz + 1.4))); scene.add(landingHead);
     landingLamp.pos.copy(landingHead.position); landingLamp.halo.position.copy(landingHead.position);
+    { const pd = P.pointAt(DS);   // the landing's upper corner beside the lamp (the ceiling woman crouches here), plane faces along the path toward the corridor, where you look back from
+      anchors.corners.push({ id: 'estate-landing-corner', zone: 'estate', pos: world(frame(DS), -3.4, 4.3, -13.3), yaw: Math.atan2(pd.tx, pd.tz), lamp: 'estate-landing-lamp' }); }
     // hall: doors in the right wall, a dead chandelier above the lamp, a hall table
     for (const z of [-5.5, -9.5]) f(pg(1.3, 2.6), M.door, 2.93, 1.3, z, -Math.PI / 2);
     f(unitCyl, M.iron, 0, 3.3, -3.6, 0, 0.02, 1.1, 0.02); f(unitCone, M.iron, 0, 3.15, -3.6, 0, 0.5, 0.25, 0.5); f(box(0.18, 0.18, 0.18), M.lampHead, 0, 3.4, -3.6);
