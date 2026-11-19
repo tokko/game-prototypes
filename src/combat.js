@@ -222,14 +222,32 @@ export class Combat {
       // sub-step by distance (<=1.2 units each) so a fast ball cannot tunnel past soldiers
       const sub = Math.min(160, Math.max(1, Math.ceil(Math.hypot(b.vx, b.vy, b.vz) * dt / 1.2))), h = dt / sub;
       for (let k = 0; k < sub && b.alive !== false; k++) {
-        b.vy -= G * h; b.x += b.vx * h; b.y += b.vy * h; b.z += b.vz * h;
+        let hs = Math.hypot(b.vx, b.vz);
+        const ux = b.vx / hs, uz = b.vz / hs;
+        if (b.roll) {   // rolling along the ground: grass drag, slowed going uphill
+          const sl = (th.heightAt(b.x + ux * 2, b.z + uz * 2) - th.heightAt(b.x - ux * 2, b.z - uz * 2)) / 4;
+          const nh = hs - (60 + 0.5 * hs + G * sl) * h, k = Math.max(0, nh) / hs;
+          b.vx *= k; b.vz *= k; b.x += b.vx * h; b.z += b.vz * h; b.y = th.heightAt(b.x, b.z) + 0.2;
+          if (nh < 5) b.alive = false;
+        } else {
+          b.vy -= G * h; b.x += b.vx * h; b.y += b.vy * h; b.z += b.vz * h;
+        }
         const gy = th.heightAt(b.x, b.z);
-        if (b.y <= gy + 0.2) {
+        if (!b.roll && b.y <= gy + 0.2) {
           b.y = gy + 0.2;
-          if (b.vy < 0) {   // ricochet: shallow low hop, losing speed each graze
-            b.vy = Math.min(5, Math.max(2.5, -b.vy * 0.45 + 1.5)); b.vx *= 0.78; b.vz *= 0.78; b.b++;
-            this.fx.dustKick(b.x, gy, b.z, 3, 4);
-            if (Math.hypot(b.vx, b.vz) < 30 || b.b > 8) b.alive = false;
+          if (b.vy < 0) {
+            // impact angle against the ground along the line of flight (rising ground steepens it)
+            const sl = (th.heightAt(b.x + ux * 2, b.z + uz * 2) - th.heightAt(b.x - ux * 2, b.z - uz * 2)) / 4;
+            const ang = Math.atan2(-b.vy, hs) + Math.atan(sl);
+            if (ang > 0.26) {   // ~15 degrees or steeper: the ball buries itself
+              this.fx.dustKick(b.x, gy, b.z, 5, 6, ux, uz); b.alive = false;
+            } else {            // graze: skip back up off the ground, losing speed
+              const k = 0.72 - ang;
+              b.vx *= k; b.vz *= k; hs *= k; b.b++;
+              b.vy = Math.max(0, -b.vy * 0.55 + sl * hs);
+              this.fx.dustKick(b.x, gy, b.z, 3, 4, ux, uz);
+              if (b.vy < 1.2) { b.vy = 0; b.roll = true; }
+            }
           }
         }
         if (b.y < gy + 2.6) {
@@ -237,16 +255,16 @@ export class Combat {
             if (r.side === b.side || r.state === 'gone') continue;
             if (Math.hypot(r.x - b.x, r.z - b.z) > r.radius + 3) continue;
             let hit = null;
+            const pk = 0.45 * Math.min(1, Math.hypot(b.vx, b.vz) / 60);   // a slow rolling ball maims fewer
             for (const s of r.soldiers) {
               const dx = s.x - b.x, dz = s.z - b.z;
-              if (dx * dx + dz * dz < 1.9 && R() < 0.45) { hit = s; break; }
+              if (dx * dx + dz * dz < 1.9 && R() < pk) { hit = s; break; }
             }
             if (hit) {
               const i = r.soldiers.indexOf(hit);
               this.killIdx(r, i); this.hurt(r, 1, 'cannon');
               b.vx *= 0.88; b.vz *= 0.88; b.vy *= 0.9;
-              this.fx.dustKick(b.x, gy, b.z, 2, 3);
-              if (Math.hypot(b.vx, b.vz) < 40) b.alive = false;
+              if (Math.hypot(b.vx, b.vz) < 8) b.alive = false;
             }
           }
         }

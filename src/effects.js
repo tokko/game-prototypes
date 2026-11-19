@@ -404,11 +404,14 @@ export class Effects {
       this.dust.spawn(x + dx * 2, y - 1, z + dz * 2, (dx * c - dz * s) * sp, 0.3, (dx * s + dz * c) * sp, 3 + R() * 2, 2, 6 + R() * 4, 0.45, [0.55, 0.43, 0.3], rv());
     }
   }
-  dustKick(x, y, z, n = 3, size = 4) {
-    for (let i = 0; i < n; i++) this.dust.spawn(x + (R() - 0.5) * 1.5, y + 0.3, z + (R() - 0.5) * 1.5, (R() - 0.5) * 3, 1.5 + R() * 2, (R() - 0.5) * 3, 2.5 + R() * 2.5, 0.8, size * (0.8 + R() * 0.8), 0.55, [0.55, 0.43, 0.3], rv());
+  // dx/dz: optional travel direction; the spray is then thrown forward and low (a graze, not a burst)
+  dustKick(x, y, z, n = 3, size = 4, dx = 0, dz = 0) {
+    const fw = dx || dz ? 1 : 0;
+    for (let i = 0; i < n; i++) this.dust.spawn(x + (R() - 0.5) * 1.5, y + 0.3, z + (R() - 0.5) * 1.5, (R() - 0.5) * 3 + dx * 5, 1.5 + R() * 2 - fw * 0.8, (R() - 0.5) * 3 + dz * 5, 2.5 + R() * 2.5, 0.8, size * (0.8 + R() * 0.8), 0.55, [0.55, 0.43, 0.3], rv());
     if (n >= 2) for (let i = 0; i < n * 2; i++) { // flying dirt clods
       const a = R() * 6.283, sp = 2 + R() * 5;
-      this.dirt.spawn(x, y + 0.3, z, Math.cos(a) * sp, 4 + R() * 7, Math.sin(a) * sp, 0.9 + R() * 0.9, 0.5, 0.9 + R() * 0.6, 0.85, [0.32, 0.23, 0.15], rv());
+      const vx = fw ? dx * (6 + R() * 8) + (R() - 0.5) * 3 : Math.cos(a) * sp, vz = fw ? dz * (6 + R() * 8) + (R() - 0.5) * 3 : Math.sin(a) * sp;
+      this.dirt.spawn(x, y + 0.3, z, vx, fw ? 2 + R() * 4 : 4 + R() * 7, vz, 0.9 + R() * 0.9, 0.5, 0.9 + R() * 0.6, 0.85, [0.32, 0.23, 0.15], rv());
     }
   }
   // ---- corpses
@@ -433,6 +436,7 @@ export class Effects {
       // thin, short smoke streak: a small fading puff every ~9 units of flight (the ball is fast, so space by distance)
       const dx = b.x - last[0], dy = b.y - last[1], dz = b.z - last[2], d = Math.hypot(dx, dy, dz);
       if (d < 9) continue;
+      if (b.roll) { last[0] = b.x; last[1] = b.y; last[2] = b.z; continue; }
       const n = Math.min(8, Math.floor(d / 9));
       for (let i = 1; i <= n; i++) {
         const f = i / n;
