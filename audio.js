@@ -190,6 +190,7 @@ function update(dt, s, camera) {
   windHiGain.gain.setTargetAtTime(0.012 * (1 - 0.8 * inside), now, 0.35);
 
   for (const c of choirs) c.tick();
+  for (const c of sobbers) c.tick();
   const zi = P.zoneIndex(s);
   dripT -= dt; distT -= dt;
   if (dripT <= 0) { drip(zi); dripT = DRIP_EVERY[zi] * (0.4 + Math.random() * 1.2) / (1 + inside * 0.5); }
@@ -296,6 +297,98 @@ function choir() {
   return api;
 }
 
+// ---- the sobbing woman (round 2, see apparitions.js): one voice, spatialised at her window ---------------------------
+// Irregular episodes: each sob is a quick catching inhale (often stuttered, a thin whine under it) then a trembling voiced
+// exhale (sawtooth with vibrato and tremor through three female-vowel formants, falling pitch, now and then a voice
+// crack), with the odd hiccup, whimper and a shuddering out-breath, then a silence of a second or two. api: stop() cuts
+// dead, fade(sec), tick() (driven from update).
+const FEM = [[850, 1220, 2810], [760, 1400, 2780], [610, 1100, 2450], [500, 910, 2500]];   // ah, uh, aw, o
+const SOB_PEAK = 0.7;
+const sobbers = new Set();
+function sobber(pos) {
+  if (!ctx) return null;
+  const bus = gain(0), pan = makePanner(pos), now0 = ctx.currentTime;
+  pan.refDistance = 8; pan.rolloffFactor = 1;
+  bus.connect(filt('lowpass', 3600, 0.5)).connect(pan);
+  bus.gain.setTargetAtTime(1, now0, 0.8);
+  const rr = (a, b) => a + Math.random() * (b - a), pick = (a) => a[(Math.random() * a.length) | 0];
+  const noise = (t, dur) => { const n = ctx.createBufferSource(); n.buffer = noiseBuf('white'); n.start(t, rr(0, 2.5), dur + 0.05); return n; };
+  const ramp = (param, t, pts) => { param.setValueAtTime(pts[0][1], t + pts[0][0]); for (let i = 1; i < pts.length; i++) param.linearRampToValueAtTime(pts[i][1], t + pts[i][0]); };
+  // a voiced exhale. shape = [u, pitch ratio] points over the duration; crack inserts a break in the voice
+  function voiced(t, { f0, dur, amp, vow, crack = false, breathy = 0.3, shape = [[0, 1.15], [0.12, 1], [1, 0.8]] }) {
+    const pts = shape.map(([u, r]) => [u * dur, f0 * r]);
+    if (crack) { const c = dur * rr(0.35, 0.6), r = f0 * (1.05 - 0.25 * c / dur); pts.splice(2, 0, [c, r], [c + 0.025, r * 1.45], [c + 0.1, r * 0.95]); pts.sort((a, b) => a[0] - b[0]); }
+    const o = ctx.createOscillator(); o.type = 'sawtooth'; ramp(o.frequency, t, pts);
+    const vib = ctx.createOscillator(), vg = gain(f0 * 0.028); vib.frequency.value = rr(6.5, 9.5); vib.connect(vg).connect(o.frequency);   // the trembling
+    const tre = ctx.createOscillator(), tg = gain(0.28), am = gain(1); tre.frequency.value = rr(7, 11); tre.connect(tg).connect(am.gain);
+    const src = gain(1), br = gain(breathy * 1.4), env = gain(0);
+    o.connect(am).connect(src); noise(t, dur).connect(br).connect(src);
+    FEM[vow].forEach((f, k) => {
+      const bp = filt('bandpass', f * (k === 0 ? 1.1 : 1), [7, 9, 11][k]);
+      if (k === 0) { bp.frequency.setValueAtTime(f * 1.1, t); bp.frequency.linearRampToValueAtTime(f * 0.82, t + dur); }   // the jaw closes as the breath runs out
+      src.connect(bp); bp.connect(gain([1, 0.6, 0.22][k] * 2.6)).connect(env);
+    });
+    env.gain.setValueAtTime(0.0001, t); env.gain.linearRampToValueAtTime(amp, t + Math.min(0.05, dur * 0.25)); env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    env.connect(bus);
+    for (const x of [o, vib, tre]) { x.start(t); x.stop(t + dur + 0.06); }
+  }
+  function inhale(t, dur, amp, whine = 0) {   // breath in: rising, sharpening noise, cut off short
+    const n = noise(t, dur), bp = filt('bandpass', 1000, 1.2), bp2 = filt('bandpass', 2600, 1.6), g = gain(0);
+    bp.frequency.setValueAtTime(900, t); bp.frequency.linearRampToValueAtTime(2000, t + dur);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(amp * 2.2, t + dur * 0.8); g.gain.linearRampToValueAtTime(0.0001, t + dur + 0.012);
+    n.connect(bp).connect(g); n.connect(bp2).connect(gain(0.5)).connect(g); g.connect(bus);
+    if (whine) tone(bus, t, { freq: 480, freqEnd: 680, type: 'triangle', attack: dur * 0.5, dur: dur * 0.6, gain: whine, lp: 1400 });
+  }
+  const exhale = (t, dur, amp) => noiseBurst(bus, t, { type: 'bandpass', freq: 800, q: 0.9, attack: 0.1, dur, gain: amp * 2 });
+  function sob(t, k) {   // one sob cycle starting at t, returns its end
+    const inD = rr(0.13, 0.24); let u = t;
+    if (Math.random() < 0.6) { const n = 2 + (Math.random() < 0.4 ? 1 : 0); for (let i = 0; i < n; i++) { inhale(u, inD / n * 0.8, SOB_PEAK * rr(0.25, 0.4) * (0.6 + 0.4 * i / n), 0.05); u += inD / n; } }
+    else { inhale(u, inD, SOB_PEAK * rr(0.3, 0.45), 0.04); u += inD; }
+    const dur = rr(0.3, 0.55);
+    voiced(u, { f0: rr(215, 262) * (1 - 0.02 * k), dur, amp: SOB_PEAK * rr(0.55, 1) * (k === 0 ? 1.1 : 1), vow: pick([0, 0, 1, 2]), crack: Math.random() < 0.22 });
+    return u + dur + rr(0.0, 0.3);
+  }
+  function episode(t) {
+    const n = 3 + ((Math.random() * 4) | 0);
+    for (let i = 0; i < n; i++) t = sob(t, i) + (Math.random() < 0.2 ? rr(0.2, 0.5) : 0);
+    if (Math.random() < 0.35) { voiced(t, { f0: rr(300, 380), dur: 0.09, amp: SOB_PEAK * 0.9, vow: 1, shape: [[0, 0.8], [0.25, 1.35], [1, 0.9]], breathy: 0.15 }); t += rr(0.3, 0.6); }   // a hiccup
+    if (Math.random() < 0.4) { voiced(t, { f0: rr(330, 400), dur: rr(0.5, 0.8), amp: SOB_PEAK * 0.3, vow: 3, breathy: 0.6, shape: [[0, 1], [1, 0.88]] }); t += 0.7; }               // a thin whimper
+    exhale(t, rr(0.7, 1.2), SOB_PEAK * 0.28);
+    return t + rr(1.0, 2.6);
+  }
+  let next = now0 + 0.3, ended = false;
+  const done = (ms) => { ended = true; sobbers.delete(api); setTimeout(() => pan.disconnect(), ms); };
+  const api = {
+    tick() { while (!ended && ctx.currentTime + 0.4 >= next) next = episode(Math.max(next, ctx.currentTime + 0.05)); },
+    stop() { if (ended) return; const t = ctx.currentTime; bus.gain.cancelScheduledValues(t); bus.gain.setValueAtTime(0, t); done(9000); },   // dead silence
+    fade(sec = 3) { if (ended) return; const t = ctx.currentTime; bus.gain.cancelScheduledValues(t); bus.gain.setTargetAtTime(0, t, sec / 4); done(9000 + sec * 1000); },
+  };
+  sobbers.add(api);
+  return api;
+}
+
+// A long breathy sigh passing through the trees (the forest wraith): white noise through three vowel-ish formants that bend
+// slowly downward, a faint voiced "oh" underneath. Returns { move(x, y, z) } to carry its panner along.
+function sigh(pos, dur = 4) {
+  if (!ctx) return null;
+  const t = ctx.currentTime + 0.03, pan = makePanner(pos), env = gain(0), nz = ctx.createBufferSource();
+  pan.refDistance = 9; pan.rolloffFactor = 0.9;
+  env.connect(filt('lowpass', 3400, 0.5)).connect(pan);
+  nz.buffer = noiseBuf('white'); nz.loop = true; nz.start(t, Math.random() * 3);
+  const o = ctx.createOscillator(), vib = ctx.createOscillator(), vg = gain(4), og = gain(0.5), br = gain(1.6), src = gain(1);
+  o.type = 'sawtooth'; o.frequency.setValueAtTime(205, t); o.frequency.exponentialRampToValueAtTime(128, t + dur);
+  vib.frequency.value = 5.2; vib.connect(vg).connect(o.frequency);
+  o.connect(og).connect(src); nz.connect(br).connect(src);
+  [[520, 330, 6, 1], [1050, 720, 7, 0.55], [2400, 1900, 9, 0.2]].forEach(([a, b, q, m]) => {
+    const bp = filt('bandpass', a, q); bp.frequency.setValueAtTime(a, t); bp.frequency.exponentialRampToValueAtTime(b, t + dur);
+    src.connect(bp); bp.connect(gain(m * 3.2)).connect(env);
+  });
+  env.gain.setValueAtTime(0.0001, t); env.gain.linearRampToValueAtTime(0.8, t + dur * 0.38); env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.start(t); vib.start(t); o.stop(t + dur + 0.1); vib.stop(t + dur + 0.1);
+  setTimeout(() => { try { nz.stop(); } catch { /* already stopped */ } pan.disconnect(); }, (dur + 1) * 1000);
+  return { move(x, y, z) { const n = ctx.currentTime; pan.positionX.setTargetAtTime(x, n, 0.12); pan.positionY.setTargetAtTime(y, n, 0.12); pan.positionZ.setTargetAtTime(z, n, 0.12); } };
+}
+
 function footstep(surface, brisk) {
   if (!ctx) return;
   stepSide = -stepSide; stepPan.pan.value = stepSide * 0.12;
@@ -303,7 +396,7 @@ function footstep(surface, brisk) {
 }
 
 export const audio = {
-  start, update, footstep, playAt, footstepAt, makePanner, noiseBurst, tone, stepSound, choir, lx: 0, lz: 0,
+  start, update, footstep, playAt, footstepAt, makePanner, noiseBurst, tone, stepSound, choir, sobber, sigh, lx: 0, lz: 0,
   get ctx() { return ctx; },
   get ready() { return !!ctx && ctx.state === 'running'; },
 };
