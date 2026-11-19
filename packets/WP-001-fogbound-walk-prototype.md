@@ -136,3 +136,9 @@ Human playtest feedback on the first build: scares were random dice rolls not ti
 - Deviations: the corridor figure's window is s 376-393 (it appears at the far end of the straight corridor, not after the bend, because the bend wall blocks the line of sight from beyond it); the square woman's window is s 84-106 (the window is only visible from about s 94).
 
 Status line unchanged: the human playtest gate (beat placement, scare pacing, atmosphere, audio) is still open.
+
+## Final iteration (RUN-20261119-03)
+
+Follow-on to the rework: painted billboard apparitions (`assets/apparitions`), the fleshbeast (`assets/fleshbeast.glb`, `beast.js`; beats beast-warn, beast-hollow, beast-courtyard, beast-corridor, a rare glimpse, choir and skitter audio), and five round-2 apparitions with art in `assets/round2`. The round-2 five are self-contained actors in `apparitions.js` (own slots, never the director's `active`), started by new `actor` beats: weeping angel (lane, 48-84), forest wraith (160-182, also a rare random event), sobbing woman at the open lodge window (316-346), ceiling-corner woman (390-410, after the landing lamp); plus the random-layer `crosser` event in every zone. New procedural audio: sobbing, wraith sigh, stone scrape, sob sting. The sobbing woman's head turn is a second deliberate exception to "change only while unobserved". Checked with scripted yaw (no real mouse): all beats reach done, no console errors, end screen shows. README updated (beat table, sections, known limits).
+
+Status: human keep/retire playtest gate open (scariness, audio balance by ear, real mouse input).
