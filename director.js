@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import * as P from './path.js';
 import { createApparitions } from './apparitions.js';
+import { createBeast } from './beast.js';
 
 // ===== TUNING: every director constant lives here ===================================================
 export const TUNING = {
@@ -51,6 +52,10 @@ export const TUNING = {
   BEAT_LEAD_M: 10,            // m before a beat window opens in which random events are already held back
   BEAT_CUE_LEAD: [1.5, 3],    // s from a visual beat's cue sound to its spawn attempt
   BEAT_FORCE: 5,              // s a beat target stays observed before a flicker/fog swell makes it unobserved
+  // the fleshbeast (beast.js) has its own SCRIPTS; this is only the rare random glimpse between the hollow and the courtyard
+  BEAST_GLIMPSE_CHANCE: 0.15, // per consideration, once the hollow set piece is done
+  BEAST_GLIMPSE_CD: 120,      // s between glimpses
+  BEAST_GLIMPSE_S: [296, 344], // arc length range where a glimpse may happen
   // escalation: how the random layer scales per zone. audio/visual multiply the chances, cd multiplies the
   // audio cooldown, ring multiplies the radius of random sounds, steps multiplies steps-behind weight.
   ZONE: {
@@ -81,7 +86,8 @@ export const EVENTS = [
 // kind: audio (one cue, `at` = {s, lat, y} on the path frame, lat > 0 right; default is a ring round the player),
 // steps (steps-behind), lure (`cue` repeats at `place` every `every` s), toggle (set world.toggles[toggle] while
 // unobserved, `cue` optional), visual (`cue` at the anchor, then `ev` spawns there while unobserved; ev, anchor
-// and cue name EVENTS/world anchors/apparitions sounds). A beat that is not done by `s[1]` is dropped.
+// and cue name EVENTS/world anchors/apparitions sounds), beast (run SCRIPTS[script] of beast.js; `force` interrupts an
+// unseen beast already running). A beat that is not done by `s[1]` is dropped.
 export const BEATS = [
   // village: sounds and one glimpse
   { id: 'side-door',        zone: 'village', s: [22, 46],   kind: 'toggle', toggle: 'sideDoor', value: true, cue: 'door-creak' },
@@ -92,12 +98,16 @@ export const BEATS = [
   { id: 'lure',             zone: 'forest',  s: [160, 200], kind: 'lure', cue: 'hum', place: 'forest-lantern', every: [8, 12], tension: 0.02 },
   { id: 'fence',            zone: 'forest',  s: [181, 196], kind: 'audio', cue: 'heavy-drag', at: { s: 184, lat: 4.4, y: 0.4 }, tension: 0.1 },
   { id: 'clearing-creature', zone: 'forest', s: [200, 238], kind: 'visual', ev: 'forest-shadow', anchor: 'forest-clearing-stone', cue: 'branch-snap' },
+  { id: 'beast-warn',       zone: 'forest',  s: [240, 262], kind: 'beast', script: 'warn' },                    // distant moaning, nothing seen
   { id: 'hollow',           zone: 'forest',  s: [262, 280], kind: 'audio', cue: 'whisper', tension: 0.12 },
+  { id: 'beast-hollow',     zone: 'forest',  s: [262, 296], kind: 'beast', script: 'hollow', force: true },  // first sighting
   // estate: densest, enclosed
   { id: 'courtyard-figure', zone: 'estate',  s: [346, 366], kind: 'visual', ev: 'distant-figure', anchor: 'estate-courtyard-door', cue: 'door-creak' },
   { id: 'landing-light',    zone: 'estate',  s: [390, 402], kind: 'toggle', toggle: 'landingLamp', value: true, cue: 'click' },
   { id: 'corridor-door',    zone: 'estate',  s: [402, 414], kind: 'toggle', toggle: 'corridorDoor', value: true },
   { id: 'corridor-figure',  zone: 'estate',  s: [376, 393], kind: 'visual', ev: 'distant-figure', anchor: 'estate-corridor', cue: 'drag' },
+  { id: 'beast-courtyard',  zone: 'estate',  s: [356, 376], kind: 'beast', script: 'courtyard' },
+  { id: 'beast-corridor',   zone: 'estate',  s: [394, 420], kind: 'beast', script: 'corridor', force: true }, // the payoff
 ];
 
 const D2R = Math.PI / 180;
@@ -128,6 +138,20 @@ export function createDirector(game) {
   };
   const apparitions = createApparitions(game, host);
   director.apparitions = apparitions;
+  // the fleshbeast borrows the director's "observed" test and its flicker / fog-swell denial
+  const beast = director.beast = createBeast(game, {
+    observe: (p) => observedAt(p),
+    tension: (v) => { tension = Math.min(1, tension + v); },
+    deny(p, dist, lampId) {                     // lampId forces that lamp's flicker; otherwise the nearest lit lamp, else a fog swell
+      if (deny) return false;
+      const lamp = lampId ? world.lamps.find((l) => l.id === lampId) : world.lamps.filter((l) => l.level > 0.5 && Math.hypot(l.pos.x - p.x, l.pos.z - p.z) < 14)
+        .sort((a, b) => Math.hypot(a.pos.x - p.x, a.pos.z - p.z) - Math.hypot(b.pos.x - p.x, b.pos.z - p.z))[0];
+      startDeny({ lamp: lamp || null }, dist, !!lampId);
+      return !!deny;
+    },
+    denyDark: () => !!deny && (deny.kind === 'flicker' ? deny.lamp.flicker < 0.3 : director.fogSwell > deny.amp * 0.5),
+  });
+  let lastGlimpse = -1e9;
 
   function record(id, bump) {
     history.push({ id, t }); if (history.length > K.HISTORY_N) history.shift();
@@ -216,6 +240,11 @@ export function createDirector(game) {
   function decide() {
     nextDecide = t + rand(...K.DECIDE_EVERY);
     if (t < K.START_GRACE || beatQuiet()) return;
+    if (beast.busy) return;
+    if (bst['beast-hollow'].st === 'done' && !active && !pending && player.s >= K.BEAST_GLIMPSE_S[0] && player.s <= K.BEAST_GLIMPSE_S[1] &&
+        t - lastGlimpse > K.BEAST_GLIMPSE_CD && tension <= K.VISUAL_MAX_TENSION && Math.random() < K.BEAST_GLIMPSE_CHANCE && beast.start('glimpse')) {
+      lastGlimpse = t; record('beast-glimpse', 0); return;
+    }
     const busy = apparitions.steps.active, Z = K.ZONE[player.zone];
     if (!busy && !active && !pending && t - lastVisualAt > K.VISUAL_GLOBAL_CD && tension <= K.VISUAL_MAX_TENSION && Math.random() < K.VISUAL_CHANCE * Z.visual && tryVisual()) return;
     if (!busy && t - lastAudioAt > K.AUDIO_GLOBAL_CD * Z.cd && tension <= K.AUDIO_MAX_TENSION &&
@@ -226,7 +255,7 @@ export function createDirector(game) {
   // Random events are held back around a beat: while one is armed or pending, shortly before a window opens,
   // and for BEAT_QUIET seconds after a beat fires.
   function beatQuiet() {
-    if (t < quietUntil) return true;
+    if (t < quietUntil || beast.busy) return true;
     return BEATS.some((b) => { const st = bst[b.id].st; return b.kind !== 'lure' && (st === 'armed' || st === 'pending' || (st === 'waiting' && player.s >= b.s[0] - K.BEAT_LEAD_M && player.s < b.s[0])); });
   }
   const endBeat = (b, why) => { bst[b.id].st = 'done'; bst[b.id].why = why; };
@@ -259,6 +288,10 @@ export function createDirector(game) {
         }
         if (b.cue) apparitions.audio[b.cue]({ x: tog.gaze.x, y: tog.gaze.y, z: tog.gaze.z });
         tog.set(b.value); fire(); endBeat(b, 'fired');
+      } else if (b.kind === 'beast') {
+        if ((active || pending) && player.s < b.s[0] + 4) continue;      // let a visible apparition finish first (but not for long)
+        if (!beast.start(b.script, b.force)) continue;
+        lastAudioAt = t; fire(); endBeat(b, 'fired');
       } else if (b.kind === 'visual') {
         if (active || (pending && pending.beat)) continue;
         const a = world.anchors[EVENTS.find((e) => e.id === b.ev).anchors].find((x) => x.id === b.anchor);
@@ -270,9 +303,9 @@ export function createDirector(game) {
   }
 
   // ---- denying a long look: lamp flicker or fog swell, both read as "unobserved" --------------------
-  function startDeny(app, dist) {
+  function startDeny(app, dist, forceLamp = false) {
     if (deny) return;
-    const base = P.fogDensity(player.s), useLamp = app.lamp && Math.random() < K.DENY_FLICKER_CHANCE;
+    const base = P.fogDensity(player.s), useLamp = app.lamp && (forceLamp || Math.random() < K.DENY_FLICKER_CHANCE);
     deny = { app, t0: t, kind: useLamp ? 'flicker' : 'fog', lamp: app.lamp, amp: clamp(2.4 / Math.max(dist, 6) - base, 0.05, K.DENY_SWELL_MAX) };
     record('deny:' + deny.kind, 0);
   }
@@ -361,6 +394,7 @@ export function createDirector(game) {
     tension *= Math.exp(-dt / K.TENSION_TAU);
     trackTurn();
     updateDeny();
+    beast.update(dt);
     if (active) updateActive(dt);
     if (pending && !active) updatePending(dt);
     updateBeats(dt);
@@ -393,6 +427,7 @@ export function createDirector(game) {
       `last event ${last ? `${last.id} (${(t - last.t).toFixed(0)}s ago)` : '-'}`,
       `observed ${focus ? `${focus.id} ${focus.obs ? 'YES' : 'no'} dwell ${focus.dwell.toFixed(1)}s d ${focus.d.toFixed(0)}m` : (pending ? `pending ${pending.ev.id}` : '-')}`,
       `deny ${deny ? deny.kind : '-'}  steps-behind ${apparitions.steps.active ? 'ON' : '-'}`,
+      `beast ${beast.status()}`,
       ...EVENTS.map((ev) => `  ${ev.id.padEnd(15)} ${cd(ev.cooldown - (t - (lastFired[ev.id] ?? -1e9)))}s`),
       `beats (random quiet ${cd(quietUntil - t)}s)`,
       ...BEATS.map((b) => `  ${b.id.padEnd(17)} ${bst[b.id].st}${bst[b.id].why ? ` (${bst[b.id].why})` : ''}`),

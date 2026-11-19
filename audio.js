@@ -189,10 +189,111 @@ function update(dt, s, camera) {
   windGain.gain.setTargetAtTime(Math.max(0.12, wl), now, 0.35);
   windHiGain.gain.setTargetAtTime(0.012 * (1 - 0.8 * inside), now, 0.35);
 
+  for (const c of choirs) c.tick();
   const zi = P.zoneIndex(s);
   dripT -= dt; distT -= dt;
   if (dripT <= 0) { drip(zi); dripT = DRIP_EVERY[zi] * (0.4 + Math.random() * 1.2) / (1 + inside * 0.5); }
   if (distT <= 0) { distant(zi); distT = 14 + Math.random() * 18; }
+}
+
+// ---- the beast's choir: ~12 agonised voices spatialised on the creature (see beast.js) ------------------
+// Each voice is a detuned saw + pulse with vibrato and tremor, fed (with breath noise) through three
+// vowel-formant bandpass filters, and sings irregular phrases: moans (sagging pitch), sighs, rare high wails.
+// Voices are spread over three PannerNodes that follow the beast; `k` (0 far .. 1 close) sets the level and
+// how many voices are singing. api: place(x, y, z, k), scuttle(vol), surge(), hush(sec), release().
+const VOWELS = [[300, 870, 2240], [730, 1090, 2440], [570, 840, 2410], [530, 1840, 2480], [390, 1990, 2550], [640, 1190, 2390]];
+const CHOIR_VOICES = 12, CHOIR_PEAK = 0.17;
+const choirs = new Set();
+
+function scuttleSound(out, t, vol) {   // dry skitter of claws plus a wet click
+  const n = 2 + ((Math.random() * 3) | 0);
+  for (let i = 0; i < n; i++) noiseBurst(out, t + i * 0.017 + Math.random() * 0.012, { type: 'bandpass', freq: 2500 + Math.random() * 3500, q: 3, dur: 0.012 + Math.random() * 0.01, gain: 0.5 * vol });
+  if (Math.random() < 0.6) {
+    const c = Math.random() * 0.04;
+    tone(out, t + c, { freq: 500 + Math.random() * 500, freqEnd: 170, type: 'triangle', dur: 0.035, gain: 0.22 * vol });
+    noiseBurst(out, t + c, { type: 'bandpass', freq: 900 + Math.random() * 600, q: 6, dur: 0.03, gain: 0.3 * vol });
+  }
+  if (Math.random() < 0.15) noiseBurst(out, t, { type: 'lowpass', freq: 420, dur: 0.07, gain: 0.35 * vol });   // a wet slap
+}
+
+function choir() {
+  if (!ctx) return null;
+  const srcs = [], buses = [], panners = [];
+  for (let i = 0; i < 3; i++) {
+    const b = gain(0), p = makePanner({ x: 0, y: 0, z: 0 });
+    p.refDistance = 8; p.rolloffFactor = 0.5;
+    b.connect(filt('lowpass', 4300, 0.5)).connect(p); buses.push(b); panners.push(p);
+  }
+  const O = (type, f) => { const o = osc(type, f); srcs.push(o); return o; };
+  const voices = [];
+  for (let i = 0; i < CHOIR_VOICES; i++) {
+    const f0 = [95 + Math.random() * 40, 170 + Math.random() * 80, 250 + Math.random() * 90][i % 3];
+    const o1 = O('sawtooth', f0), o2 = O('square', f0 * 1.007), src = gain(1);
+    o1.connect(src); o2.connect(gain(0.3)).connect(src);
+    const vib = O('sine', 4.5 + Math.random() * 2), vg = gain(f0 * 0.014), tre = O('sine', 8 + Math.random() * 4), tg = gain(f0 * 0.004);
+    vib.connect(vg); vg.connect(o1.frequency); vg.connect(o2.frequency); tre.connect(tg); tg.connect(o1.frequency); tg.connect(o2.frequency);
+    const nz = ctx.createBufferSource(); nz.buffer = noiseBuf('white'); nz.loop = true; nz.start(0, Math.random() * 3); srcs.push(nz);
+    const breath = gain(0.1), env = gain(0), bps = [];
+    nz.connect(breath);
+    [1, 0.6, 0.25].forEach((a, k) => { const bp = filt('bandpass', VOWELS[1][k], 9); src.connect(bp); breath.connect(bp); bp.connect(gain(a)).connect(env); bps.push(bp); });
+    env.connect(buses[i % 3]);
+    voices.push({ f0, o1, o2, env, bps, breath, next: Math.random() * 2, i });
+  }
+  let active = 3, hushUntil = 0;
+  function sing(v, kind) {
+    const t = ctx.currentTime, wail = kind === 'wail', sigh = kind === 'sigh';
+    const f = wail ? Math.min(900, v.f0 * (2.4 + Math.random())) * (0.9 + Math.random() * 0.2) : v.f0 * Math.pow(2, (Math.floor(Math.random() * 5) - 2) / 12);
+    const dur = wail ? 1.2 + Math.random() * 1.4 : sigh ? 0.9 + Math.random() * 0.9 : 1.5 + Math.random() * 2;
+    const f1 = wail ? f * 1.25 : sigh ? f * 0.7 : f * (0.8 + Math.random() * 0.12);
+    for (const o of [v.o1, v.o2]) {
+      const d = o === v.o2 ? 1.007 : 1;
+      o.frequency.cancelScheduledValues(t); o.frequency.setValueAtTime(o.frequency.value, t);
+      o.frequency.setTargetAtTime(f * d, t, 0.05);
+      o.frequency.setTargetAtTime(f1 * d, t + dur * (wail ? 0.3 : 0.15), dur * 0.35);
+      if (wail) o.frequency.setTargetAtTime(f * 0.8 * d, t + dur * 0.65, dur * 0.2);
+    }
+    const pick = (a) => a[(Math.random() * a.length) | 0];
+    const A = pick(wail ? [1, 3] : sigh ? [1, 5] : [0, 2, 5]), B = pick([0, 1, 2, 3, 5]);
+    v.bps.forEach((bp, k) => {
+      bp.frequency.cancelScheduledValues(t);
+      bp.frequency.setTargetAtTime(VOWELS[A][k] * (0.97 + Math.random() * 0.06), t, 0.12);
+      bp.frequency.setTargetAtTime(VOWELS[B][k], t + dur * 0.5, dur * 0.25);   // the vowel slides, as in pain
+    });
+    const peak = CHOIR_PEAK * (0.55 + Math.random() * 0.45) * (wail ? 0.7 : 1), at = 0.2 + Math.random() * 0.35;
+    v.breath.gain.setTargetAtTime(sigh ? 0.45 : 0.1 + Math.random() * 0.12, t, 0.1);
+    v.env.gain.cancelScheduledValues(t); v.env.gain.setTargetAtTime(peak, t, at / 3);
+    v.env.gain.setTargetAtTime(0.0001, t + dur - 0.3, 0.3 + Math.random() * 0.4);
+    v.next = ctx.currentTime + dur + 0.2 + Math.random() * (v.i < 4 ? 1.2 : 3.5);   // irregular: voices drop in and out
+  }
+  const api = {
+    place(x, y, z, k) {
+      const now = ctx.currentTime;
+      panners.forEach((p, i) => {
+        const a = i * 2.1 + now * 0.2;   // the three groups sit a little apart in the pile
+        p.positionX.setTargetAtTime(x + Math.cos(a) * 0.7, now, 0.08); p.positionY.setTargetAtTime(y + 0.2 * i, now, 0.08); p.positionZ.setTargetAtTime(z + Math.sin(a) * 0.7, now, 0.08);
+      });
+      active = 3 + Math.round(9 * Math.pow(k, 0.8));
+      const lvl = now < hushUntil ? 0 : 0.35 + 0.65 * k;
+      buses.forEach((b) => b.gain.setTargetAtTime(lvl, now, now < hushUntil ? 0.05 : 0.5));
+    },
+    scuttle(vol = 1) { if (ctx) scuttleSound(panners[1], ctx.currentTime + 0.01, vol); },
+    surge() { for (const v of voices) if (v.i < active) sing(v, 'wail'); },                    // everything cries out at once
+    hush(sec = 1.5) { hushUntil = ctx.currentTime + sec; for (const v of voices) { v.env.gain.cancelScheduledValues(ctx.currentTime); v.env.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.04); v.next = hushUntil + 0.3 + Math.random(); } },
+    tick() {
+      const now = ctx.currentTime;
+      for (const v of voices) if (now >= v.next && now >= hushUntil) {
+        if (v.i >= active) { v.next = now + 0.7; v.env.gain.setTargetAtTime(0.0001, now, 0.3); continue; }
+        const r = Math.random(); sing(v, r < 0.1 ? 'wail' : r < 0.4 ? 'sigh' : 'moan');
+      }
+    },
+    release() {
+      choirs.delete(api); const now = ctx.currentTime;
+      buses.forEach((b) => b.gain.setTargetAtTime(0, now, 0.5));
+      setTimeout(() => { srcs.forEach((o) => { try { o.stop(); } catch { /* already stopped */ } }); panners.forEach((p) => p.disconnect()); }, 3000);
+    },
+  };
+  choirs.add(api);
+  return api;
 }
 
 function footstep(surface, brisk) {
@@ -202,7 +303,7 @@ function footstep(surface, brisk) {
 }
 
 export const audio = {
-  start, update, footstep, playAt, footstepAt, makePanner, noiseBurst, tone, stepSound, lx: 0, lz: 0,
+  start, update, footstep, playAt, footstepAt, makePanner, noiseBurst, tone, stepSound, choir, lx: 0, lz: 0,
   get ctx() { return ctx; },
   get ready() { return !!ctx && ctx.state === 'running'; },
 };
