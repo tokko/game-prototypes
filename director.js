@@ -56,6 +56,10 @@ export const TUNING = {
   BEAST_GLIMPSE_CHANCE: 0.15, // per consideration, once the hollow set piece is done
   BEAST_GLIMPSE_CD: 120,      // s between glimpses
   BEAST_GLIMPSE_S: [296, 344], // arc length range where a glimpse may happen
+  // round 2: the random-layer scripted visuals (EVENTS kind 'scripted': the forest wraith, the crossers), rare and short
+  SCRIPTED_CHANCE: 0.1,       // per consideration (before the event's own cooldown); they ignore the per-zone visual scale (crossers also walk the village)
+  SCRIPTED_GLOBAL_CD: 40,     // s between any two scripted visuals
+  SCRIPTED_MAX_TENSION: 0.5,  // withheld above this (events may set a lower max)
   // escalation: how the random layer scales per zone. audio/visual multiply the chances, cd multiplies the
   // audio cooldown, ring multiplies the radius of random sounds, steps multiplies steps-behind weight.
   ZONE: {
@@ -80,6 +84,9 @@ export const EVENTS = [
   { id: 'window-woman',   kind: 'visual', zones: ['village', 'estate'], anchors: 'windows', cue: 'knock',        weight: 1, cooldown: 120, maxTension: 0.3 },
   { id: 'forest-shadow',  kind: 'visual', zones: ['forest'],            anchors: 'covers',  cue: 'branch-snap',  weight: 1, cooldown: 100, maxTension: 0.3 },
   { id: 'distant-figure', kind: 'visual', zones: ['village', 'estate'], anchors: 'ends',    cue: 'door-creak',   weight: 1, cooldown: 120, maxTension: 0.3 },
+  // scripted (rare): self-contained actors in apparitions.js with slots of their own (never the `active` one). cooldown may be [min, max].
+  { id: 'wraith-drift',   kind: 'scripted', zones: ['forest'],      actor: 'wraith',  weight: 1, cooldown: 150, maxTension: 0.35 },       // a sigh crossing the path, a pale shape between the trunks
+  { id: 'crosser',        kind: 'scripted', zones: ALL,             actor: 'crosser', weight: 2, cooldown: [60, 90], tension: 0.03 },    // a dash glimpsed at the edge of the view
 ];
 
 // ===== beats: authored one-shot set pieces, plain data. Window `s` = [from, to] arc length (PLACES in path.js).
@@ -87,30 +94,37 @@ export const EVENTS = [
 // steps (steps-behind), lure (`cue` repeats at `place` every `every` s), toggle (set world.toggles[toggle] while
 // unobserved, `cue` optional), visual (`cue` at the anchor, then `ev` spawns there while unobserved; ev, anchor
 // and cue name EVENTS/world anchors/apparitions sounds), beast (run SCRIPTS[script] of beast.js; `force` interrupts an
-// unseen beast already running). A beat that is not done by `s[1]` is dropped.
+// unseen beast already running), actor (start apparitions.js's r2 actor `actor`, which runs by its own rules and is released
+// when the window closes; `after` waits for another beat to have fired, `anchor` reserves a window). A beat that is not done by
+// `s[1]` is dropped (a running actor beat is only released there).
 export const BEATS = [
   // village: sounds and one glimpse
   { id: 'side-door',        zone: 'village', s: [22, 46],   kind: 'toggle', toggle: 'sideDoor', value: true, cue: 'door-creak' },
   { id: 'square-woman',     zone: 'village', s: [84, 106],  kind: 'visual', ev: 'window-woman', anchor: 'village-square-window', cue: 'knock' },
   { id: 'shrine-candle',    zone: 'village', s: [106, 130], kind: 'toggle', toggle: 'shrineCandle', value: true },
   { id: 'alley-steps',      zone: 'village', s: [134, 146], kind: 'steps' },
+  { id: 'angel',            zone: 'village', s: [48, 84],   kind: 'actor', actor: 'angel', tension: 0.03 },                      // behind you in the lane: closer each time you look back
   // forest: a creature to follow, then closer events
   { id: 'lure',             zone: 'forest',  s: [160, 200], kind: 'lure', cue: 'hum', place: 'forest-lantern', every: [8, 12], tension: 0.02 },
+  { id: 'wraith',           zone: 'forest',  s: [160, 182], kind: 'actor', actor: 'wraith', tension: 0.03 },                     // a long sigh through the trees (overlaps only the lure's hum)
   { id: 'fence',            zone: 'forest',  s: [181, 196], kind: 'audio', cue: 'heavy-drag', at: { s: 184, lat: 4.4, y: 0.4 }, tension: 0.1 },
   { id: 'clearing-creature', zone: 'forest', s: [200, 238], kind: 'visual', ev: 'forest-shadow', anchor: 'forest-clearing-stone', cue: 'branch-snap' },
   { id: 'beast-warn',       zone: 'forest',  s: [240, 262], kind: 'beast', script: 'warn' },                    // distant moaning, nothing seen
   { id: 'hollow',           zone: 'forest',  s: [262, 280], kind: 'audio', cue: 'whisper', tension: 0.12 },
   { id: 'beast-hollow',     zone: 'forest',  s: [262, 296], kind: 'beast', script: 'hollow', force: true },  // first sighting
   // estate: densest, enclosed
+  { id: 'lodge-sobbing',    zone: 'estate',  s: [316, 346], kind: 'actor', actor: 'sob', anchor: 'estate-window-lodge', tension: 0.03 },   // sobbing from the open lodge window; looked at, it stops
   { id: 'courtyard-figure', zone: 'estate',  s: [346, 366], kind: 'visual', ev: 'distant-figure', anchor: 'estate-courtyard-door', cue: 'door-creak' },
   { id: 'landing-light',    zone: 'estate',  s: [390, 402], kind: 'toggle', toggle: 'landingLamp', value: true, cue: 'click' },
   { id: 'corridor-door',    zone: 'estate',  s: [402, 414], kind: 'toggle', toggle: 'corridorDoor', value: true },
   { id: 'corridor-figure',  zone: 'estate',  s: [376, 393], kind: 'visual', ev: 'distant-figure', anchor: 'estate-corridor', cue: 'drag' },
+  { id: 'landing-woman',    zone: 'estate',  s: [390, 410], kind: 'actor', actor: 'ceiling', after: 'landing-light' },            // in the lit corner above the landing, if you look back
   { id: 'beast-courtyard',  zone: 'estate',  s: [356, 376], kind: 'beast', script: 'courtyard' },
   { id: 'beast-corridor',   zone: 'estate',  s: [394, 420], kind: 'beast', script: 'corridor', force: true }, // the payoff
 ];
 
 const D2R = Math.PI / 180;
+const cooldownOf = (ev, roll) => roll ?? (Array.isArray(ev.cooldown) ? ev.cooldown[0] : ev.cooldown);
 const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const smooth01 = (x) => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
@@ -122,7 +136,7 @@ export function createDirector(game) {
 
   let t = 0, tension = 0, nextDecide = K.START_GRACE;
   let lastAudioAt = -1e9, lastVisualAt = -1e9;
-  const lastFired = {}, anchorUsed = {};
+  const lastFired = {}, anchorUsed = {}, cdRoll = {};       // cdRoll: the rolled cooldown of an event whose cooldown is a [min, max] range
   const history = [];                       // scare history: { id, t }
   let last = null, active = null, pending = null, deny = null, turnCool = 0, focus = null;
   const yawLog = [];
@@ -131,16 +145,9 @@ export function createDirector(game) {
   let quietUntil = -1e9;
   const director = { fogSwell: 0, beatState: bst, update, onPlayerStep };
 
-  const host = {
-    tension: (v) => { tension = Math.min(1, tension + v); },
-    log: (id) => { last = { id, t }; },
-    ring: () => K.ZONE[player.zone]?.ring ?? 1,
-  };
-  const apparitions = createApparitions(game, host);
-  director.apparitions = apparitions;
-  // the fleshbeast borrows the director's "observed" test and its flicker / fog-swell denial
-  const beast = director.beast = createBeast(game, {
-    observe: (p) => observedAt(p),
+  // what the beast and the round-2 actors borrow: the "observed" test and the flicker / fog-swell denial of a long look
+  const lend = {
+    observe: (p, fogK = 1, lamp = null) => observedAt(p, fogK, lamp),
     tension: (v) => { tension = Math.min(1, tension + v); },
     deny(p, dist, lampId) {                     // lampId forces that lamp's flicker; otherwise the nearest lit lamp, else a fog swell
       if (deny) return false;
@@ -150,8 +157,20 @@ export function createDirector(game) {
       return !!deny;
     },
     denyDark: () => !!deny && (deny.kind === 'flicker' ? deny.lamp.flicker < 0.3 : director.fogSwell > deny.amp * 0.5),
-  });
-  let lastGlimpse = -1e9;
+  };
+  const host = {
+    ...lend,
+    log: (id) => { last = { id, t }; },
+    ring: () => K.ZONE[player.zone]?.ring ?? 1,
+    denying: () => !!deny,
+    gaze: (o) => o.obs && o.cos > cosGaze,      // looking straight at it
+    beatOwns: (id) => BEATS.some((b) => b.anchor === id && bst[b.id].st !== 'done'),
+  };
+  const apparitions = createApparitions(game, host);
+  const r2 = apparitions.r2;
+  director.apparitions = apparitions;
+  const beast = director.beast = createBeast(game, lend);
+  let lastGlimpse = -1e9, lastScriptedAt = -1e9;
 
   function record(id, bump) {
     history.push({ id, t }); if (history.length > K.HISTORY_N) history.shift();
@@ -183,7 +202,7 @@ export function createDirector(game) {
   function pickAnchor(ev, app) {
     const c = [];
     for (const a of world.anchors[ev.anchors]) {
-      if (t - (anchorUsed[a.id] ?? -1e9) < K.ANCHOR_REUSE_CD || !anchorOk(ev, a)) continue;
+      if (a.reserved || t - (anchorUsed[a.id] ?? -1e9) < K.ANCHOR_REUSE_CD || !anchorOk(ev, a)) continue;   // reserved: an actor beat owns it (the open lodge window)
       if (BEATS.some((b) => b.anchor === a.id && bst[b.id].st !== 'done')) continue;   // a beat owns this anchor
       const lamp = lampFor(a);
       if (!observedAt(app.pointFor(a), app.fogK, lamp).obs) c.push({ a, lamp });
@@ -194,7 +213,7 @@ export function createDirector(game) {
   // ---- event selection -----------------------------------------------------------------------------
   function eligible(ev) {
     if (!ev.zones.includes(player.zone)) return false;
-    if (t - (lastFired[ev.id] ?? -1e9) < ev.cooldown) return false;
+    if (t - (lastFired[ev.id] ?? -1e9) < cooldownOf(ev, cdRoll[ev.id])) return false;
     if (tension > (ev.maxTension ?? 1)) return false;
     if (ev.needsMoving && player.speed < 0.4) return false;
     if (ev.minS && player.s < ev.minS) return false;
@@ -237,16 +256,27 @@ export function createDirector(game) {
     if (ev.id === 'steps-behind') apparitions.steps.start(); else apparitions.audio[ev.id]();
     record(ev.id, ev.tension ?? K.TENSION_AUDIO);
   }
+  function tryScripted() {
+    const list = EVENTS.filter((ev) => ev.kind === 'scripted' && eligible(ev)).map((ev) => ({ ev }));
+    if (!list.length) return false;
+    const ev = pickWeighted(list).ev;
+    if (!r2.start(ev.actor, ev)) return false;                   // e.g. no open gap in the periphery just now: try again later
+    lastFired[ev.id] = lastScriptedAt = t;
+    if (Array.isArray(ev.cooldown)) cdRoll[ev.id] = rand(...ev.cooldown);
+    record(ev.id, ev.tension ?? K.TENSION_AUDIO);
+    return true;
+  }
   function decide() {
     nextDecide = t + rand(...K.DECIDE_EVERY);
     if (t < K.START_GRACE || beatQuiet()) return;
-    if (beast.busy) return;
+    if (beast.busy || r2.busy) return;
     if (bst['beast-hollow'].st === 'done' && !active && !pending && player.s >= K.BEAST_GLIMPSE_S[0] && player.s <= K.BEAST_GLIMPSE_S[1] &&
         t - lastGlimpse > K.BEAST_GLIMPSE_CD && tension <= K.VISUAL_MAX_TENSION && Math.random() < K.BEAST_GLIMPSE_CHANCE && beast.start('glimpse')) {
       lastGlimpse = t; record('beast-glimpse', 0); return;
     }
     const busy = apparitions.steps.active, Z = K.ZONE[player.zone];
     if (!busy && !active && !pending && t - lastVisualAt > K.VISUAL_GLOBAL_CD && tension <= K.VISUAL_MAX_TENSION && Math.random() < K.VISUAL_CHANCE * Z.visual && tryVisual()) return;
+    if (!busy && !active && !pending && t - lastScriptedAt > K.SCRIPTED_GLOBAL_CD && tension <= K.SCRIPTED_MAX_TENSION && Math.random() < K.SCRIPTED_CHANCE && tryScripted()) return;
     if (!busy && t - lastAudioAt > K.AUDIO_GLOBAL_CD * Z.cd && tension <= K.AUDIO_MAX_TENSION &&
         Math.random() < K.AUDIO_CHANCE * Z.audio * (1 - K.AUDIO_TENSION_DAMP * tension)) tryAudio();
   }
@@ -267,6 +297,11 @@ export function createDirector(game) {
   function updateBeats(dt) {
     for (const b of BEATS) {
       const B = bst[b.id];
+      if (b.kind === 'actor' && B.st === 'pending') {            // a running actor drives itself; release it when the window closes, finish when it ends
+        if (!r2.running(b.actor)) endBeat(b, r2.result(b.actor) || 'done');
+        else if (player.s > b.s[1] && !B.released) { B.released = true; r2.release(b.actor); }
+        continue;
+      }
       if (B.st === 'done' || B.st === 'pending') continue;       // a pending visual beat is driven by updatePending
       if (player.s > b.s[1]) { endBeat(b, b.kind === 'lure' && B.st === 'armed' ? 'ended' : 'missed'); continue; }
       if (player.zone !== b.zone || player.s < b.s[0]) continue;
@@ -292,6 +327,10 @@ export function createDirector(game) {
         if ((active || pending) && player.s < b.s[0] + 4) continue;      // let a visible apparition finish first (but not for long)
         if (!beast.start(b.script, b.force)) continue;
         lastAudioAt = t; fire(); endBeat(b, 'fired');
+      } else if (b.kind === 'actor') {
+        if (b.after && bst[b.after].why !== 'fired') continue;
+        if (!r2.start(b.actor, b)) continue;
+        lastAudioAt = t; fire(); B.st = 'pending'; B.released = false;
       } else if (b.kind === 'visual') {
         if (active || (pending && pending.beat)) continue;
         const a = world.anchors[EVENTS.find((e) => e.id === b.ev).anchors].find((x) => x.id === b.anchor);
@@ -428,7 +467,8 @@ export function createDirector(game) {
       `observed ${focus ? `${focus.id} ${focus.obs ? 'YES' : 'no'} dwell ${focus.dwell.toFixed(1)}s d ${focus.d.toFixed(0)}m` : (pending ? `pending ${pending.ev.id}` : '-')}`,
       `deny ${deny ? deny.kind : '-'}  steps-behind ${apparitions.steps.active ? 'ON' : '-'}`,
       `beast ${beast.status()}`,
-      ...EVENTS.map((ev) => `  ${ev.id.padEnd(15)} ${cd(ev.cooldown - (t - (lastFired[ev.id] ?? -1e9)))}s`),
+      `r2 ${r2.status()}`,
+      ...EVENTS.map((ev) => `  ${ev.id.padEnd(15)} ${cd(cooldownOf(ev, cdRoll[ev.id]) - (t - (lastFired[ev.id] ?? -1e9)))}s`),
       `beats (random quiet ${cd(quietUntil - t)}s)`,
       ...BEATS.map((b) => `  ${b.id.padEnd(17)} ${bst[b.id].st}${bst[b.id].why ? ` (${bst[b.id].why})` : ''}`),
     ];

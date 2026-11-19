@@ -1,4 +1,5 @@
-// The four apparitions and the audio-only one-shots. This module only knows how to *show* things;
+// The four apparitions, the five round-2 actors (r2: angel, ceiling woman, sobbing woman, wraith, crossers; they enforce the
+// rules themselves through the director's host) and the audio-only one-shots. This module only knows how to *show* things;
 // the director (director.js) decides when, and enforces the "only change while unobserved" rule.
 //
 // Visual apparitions share one small interface used by the director:
@@ -32,8 +33,40 @@ const STEPS_CLOSE_RATE = 1.15;  // m/s while closing in (player walks 1.3)
 const STEPS_FACE_CONE_DEG = 50; // looking this close to the sound's direction counts as turning around
 const BREATH_CYCLES = 4;
 
+// Round-2 apparitions (assets/round2/SPEC.md). Each is a self-contained actor with its own slot; none uses the director's `active`.
+const ANGEL_GAPS = [15.5, 11.8, 8, 3.2]; // m behind the player in each pose (steps of 2-5 m); the last is where it stops, never touching
+const ANGEL_JITTER = 0.35;      // m, random spread on the gaps before the last
+const ANGEL_CUE = [1.5, 3];     // s from the stone-scrape cue to its first appearance
+const ANGEL_STEP_AFTER = 0.6;   // s unobserved after a look-back before it takes the next pose
+const ANGEL_GAZE_MAX = 3.5;     // s of looking straight at it before a flicker / fog swell takes the look (it moves on during the blink)
+const ANGEL_MIN_DIST = 2.4;     // m: walk back into it and the look is taken away
+const ANGEL_LIFE = 120;         // s, in case the player never leaves the lane
+const CEIL_TILT = 0.26;         // rad the ceiling woman's plane tilts down about its horizontal axis (never rolled)
+const CEIL_GAZE_MAX = 2.4;      // s of looking at her before the lamp flickers and she is gone
+const CEIL_GONE_AFTER = 0.35;   // s unobserved after being seen and she is gone
+const SOB_RANGE = [5, 16];      // m from the window within which a gaze counts
+const SOB_SHOW = [1.0, 1.5];    // s of gaze before she can be made out in the dark window
+const SOB_TURN = [2.0, 3.0];    // s of gaze before the sobbing stops and her head comes round
+const SOB_SILENCE = [0.3, 0.5]; // s of dead silence before the head snaps round
+const SOB_HOLD = [0.5, 0.8];    // s she is held in the turned pose, then simply gone
+const SOB_FADE = 3.5;           // s for the sobbing to fade when nobody looked
+const SOB_SCALE = 0.85, SOB_LOCAL = [0, -0.21, 0.065]; // her plane in the window group: scale, x/y/z (sits on the open gap's floor)
+const WRAITH_BEARING = [62, 78]; // deg off the gaze where it starts (outside the view cone, so it drifts in from the side)
+const WRAITH_DIST = [15, 30];    // m from the player
+const WRAITH_SPEED = [2, 4];     // m/s across the path
+const WRAITH_TIME = [3, 6];      // s, also the sigh's length
+const WRAITH_GAZE_MAX = 1.0;     // s of looking at it and it is gone
+const WRAITH_FOG_GAIN = 1.4;     // opacity = this * fog transmission squared (nearly gone at the edge of visibility)
+const CROSS_ANGLE = [30, 48];    // deg off the gaze where a crosser may start (peripheral, still on a 16:9 screen; never inside the gaze cone)
+const CROSS_DIST = [9, 26];      // m from the player
+const CROSS_GAZE_DEG = 24;       // the gaze swings this close to it and it is gone that frame
+const CROSS_LEAD = [0.35, 0.7];  // s from its sound to the dash
+const CROSS_TIME = [0.25, 0.6];  // s visible
+const CROSS_LEN = { run: [4, 6.5], low: [3, 5], window: [0.6, 0.6] }; // m travelled along the plane's u axis
+const CROSS_TRIES = 40;          // candidate spots tried (each is ray-tested against the solid world, so it crosses a real gap)
+
 export function createApparitions(game, host) {
-  const { scene, camera, audio, player } = game;
+  const { scene, camera, audio, player, world } = game;
   const A = audio;
   const fogTr = (d, k = 1) => Math.exp(-((d * scene.fog.density * k) ** 2));
   const q = new THREE.Quaternion();
@@ -124,6 +157,22 @@ export function createApparitions(game, host) {
       for (let i = 0; i < n; i++) {
         later(() => { p.x += vx; p.z += vz; A.playAt({ ...p }, (c, out, t) => A.stepSound(out, t, surf, 0.9), 0.6); }, i * 0.64);
       }
+    },
+    'stone-scrape'(pos = ring(14, 22, 0.3)) { // stone dragged on stone, faint (the weeping angel)
+      A.playAt(pos, (c, out, t) => {
+        A.noiseBurst(out, t, { type: 'bandpass', freq: 380, q: 2.2, attack: 0.45, dur: 0.9, gain: 0.55 });
+        A.noiseBurst(out, t + 0.1, { type: 'highpass', freq: 2600, attack: 0.4, dur: 0.7, gain: 0.07 });
+        A.tone(out, t, { freq: 92, freqEnd: 70, type: 'sawtooth', attack: 0.45, dur: 0.9, gain: 0.04, lp: 220 });
+      }, 2.2);
+    },
+    'sob-sting'(pos = ring(2, 3, 1.2)) { // the sobbing woman's head comes round: a hard intake, a thump, a bowed dissonant pair (restrained)
+      A.playAt(pos, (c, out, t) => {
+        A.noiseBurst(out, t, { type: 'bandpass', freq: 1800, q: 1.2, attack: 0.01, dur: 0.16, gain: 0.7 });
+        A.tone(out, t, { freq: 62, freqEnd: 40, dur: 0.5, gain: 0.7 });
+        A.tone(out, t + 0.02, { freq: 466, type: 'sawtooth', attack: 0.15, dur: 0.9, gain: 0.07, lp: 1100 });
+        A.tone(out, t + 0.02, { freq: 493, type: 'sawtooth', attack: 0.15, dur: 0.9, gain: 0.06, lp: 1100 });
+        A.tone(out, t + 0.02, { freq: 659, type: 'sawtooth', attack: 0.2, dur: 0.8, gain: 0.03, lp: 1100 });
+      }, 2);
     },
   };
 
@@ -303,13 +352,313 @@ export function createApparitions(game, host) {
   })();
 
   const visual = { 'window-woman': woman, 'forest-shadow': creature, 'distant-figure': figure };
+
+  // ===== round 2: five scripted apparitions (assets/round2/SPEC.md) ==============================================
+  // Each actor owns a small slot of its own and is started by the director (a beat, or the random layer for the wraith and the
+  // crossers); it enforces the director's rules itself through `host` (observe, gaze, deny, denyDark, tension): sound before
+  // sight, change only while unobserved (the sobbing woman's head is the one stated exception), no clean lingering look.
+  // actor api: busy, result, start(spec) -> bool, release() (the beat's window is over), update(dt), status().
+  const T2 = (n) => T.apparitionTex(n, 'round2');
+  const D2R = Math.PI / 180, cosCross = Math.cos(CROSS_GAZE_DEG * D2R);
+  const R = {};
+  const _f = new V3(), _e = new V3(), _d = new V3(), rc = new THREE.Raycaster();
+  const fwdH = () => { camera.getWorldDirection(_f); const l = Math.hypot(_f.x, _f.z) || 1; return { x: _f.x / l, z: _f.z / l }; };
+  const solids = []; scene.traverse((o) => { if (o.isMesh && o.material.isMeshStandardMaterial) solids.push(o); });   // the world's solid geometry (houses, trunks, walls)
+  const clear = (x, y, z) => {   // an unobstructed line from the eye to the point
+    _e.copy(camera.position); _d.set(x, y, z).sub(_e); const d = _d.length(); rc.set(_e, _d.normalize()); rc.far = Math.max(0, d - 0.4);
+    return rc.intersectObjects(solids, false).length === 0;
+  };
+  const surfNow = () => (P.surfaceAt(player.s) === 'cobble' ? 'cobble' : player.zone === 'estate' ? 'gravel' : 'dirt');
+
+  // ---- 1. the weeping angel: lives behind the player on the lane, closer each time you look back --------------------
+  // `gap` is how far behind the player it stands. While it is unobserved it keeps pace (re-seated at `gap` every frame); the moment
+  // it is observed it freezes where it is. Unobserved for ANGEL_STEP_AFTER s after having been seen, it takes the next pose
+  // (a closer gap) before you look again. A look held too long is taken away by a flicker, and it moves on during the blink.
+  R.angel = (() => {
+    const maps = [0, 1, 2, 3].map((i) => T2(`angel_${i}`));
+    const m = mat(maps[0], { opacity: 1 });
+    const body = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 2.0), m); body.position.y = 1.0; body.renderOrder = 1;   // bottom edge on the ground
+    const grp = new THREE.Group(); grp.add(body); grp.visible = false; scene.add(grp);
+    const S = { on: false, phase: 'off', result: '', gap: 0, pose: 0, lat: 0, cue: 0, age: 0, seenT: 0, seen: false, unobs: 0, dwell: 0, arm: false, leaving: false, leaveT: 0 };
+    const pos = new V3(), pt = new V3();
+    const seat = () => {
+      const p = P.pointAt(player.s - S.gap), lim = Math.max(0.2, P.halfWidth(p.s) - 0.45), lat = clamp(S.lat, -lim, lim);
+      pos.set(p.x + p.rx * lat, 0, p.z + p.rz * lat); grp.position.copy(pos); pt.set(pos.x, 1.0, pos.z);
+    };
+    const end = (why) => { grp.visible = false; S.on = false; S.phase = 'off'; S.result = why; host.log(`angel:${why}`); };
+    const advance = () => {
+      S.pose = Math.min(S.pose + 1, ANGEL_GAPS.length - 1);
+      S.gap = ANGEL_GAPS[S.pose] + (S.pose === ANGEL_GAPS.length - 1 ? 0 : rnd(-ANGEL_JITTER, ANGEL_JITTER));
+      m.map = maps[S.pose]; Object.assign(S, { seen: false, seenT: 0, unobs: 0, dwell: 0, arm: false });
+      seat(); snd['stone-scrape']({ x: pos.x, y: 0.3, z: pos.z }); host.tension(0.04); host.log('angel:closer');
+    };
+    return {
+      get busy() { return S.on; }, get result() { return S.result; },
+      start() {
+        if (S.on) return false;
+        Object.assign(S, { on: true, phase: 'cue', result: '', gap: ANGEL_GAPS[0], pose: 0, lat: rnd(-0.85, 0.85), cue: rnd(...ANGEL_CUE), age: 0, seenT: 0, seen: false, unobs: 0, dwell: 0, arm: false, leaving: false, leaveT: 0 });
+        grp.scale.x = Math.random() < 0.5 ? -1 : 1; m.map = maps[0];   // mirrored or not, the same for all four poses
+        seat(); snd['stone-scrape']({ x: pos.x, y: 0.3, z: pos.z });
+        return true;
+      },
+      release() { S.leaving = true; },
+      update(dt) {
+        if (!S.on) return;
+        if ((S.age += dt) > ANGEL_LIFE) S.leaving = true;
+        if (S.phase === 'cue') {
+          if ((S.cue -= dt) > 0) return;
+          if (S.leaving) return end('missed');
+          seat();
+          if (host.observe(pt).obs) return;                         // wait until nobody is looking down the lane
+          grp.visible = true; S.phase = 'live'; return;
+        }
+        const dark = host.denyDark(), o = host.observe(pt), obs = o.obs && !dark;
+        if (!host.denying()) S.arm = false;
+        grp.visible = !dark; faceCamera(grp);
+        if (obs) {
+          S.unobs = 0; S.seenT += dt;
+          if (S.seenT > 0.15 && !S.seen) { S.seen = true; host.tension(0.12); }
+          S.dwell = host.gaze(o) ? S.dwell + dt : Math.max(0, S.dwell - 2 * dt);
+          if (S.leaving) S.leaveT += dt;
+          if (!S.arm && (S.dwell > ANGEL_GAZE_MAX || o.d < ANGEL_MIN_DIST || S.leaveT > 1) && host.deny(pt, o.d)) S.arm = true;
+        } else {
+          S.seenT = 0; S.unobs += dt;
+          if (S.leaving) return end('left');                        // the window is over: it goes on the first look-away or blink
+          if (dark && S.arm) { S.arm = false; if (S.pose === ANGEL_GAPS.length - 1 || o.d < ANGEL_MIN_DIST * 1.6) return end('denied'); advance(); }
+          else if (S.seen && S.unobs >= ANGEL_STEP_AFTER) advance();
+          else seat();
+        }
+      },
+      status: () => `${S.phase} pose ${S.pose} gap ${S.gap.toFixed(1)} ${S.seen ? 'seen' : '-'} unobs ${S.unobs.toFixed(1)}`,
+    };
+  })();
+
+  // ---- 2. the woman in the landing's ceiling corner: lit by the landing lamp, gone on look-away-and-back or a flicker --------
+  R.ceiling = (() => {
+    const apex = world.anchors.corners.find((c) => c.id === 'estate-landing-corner'), lamp = world.lamps.find((l) => l.id === apex.lamp);
+    const m = mat(T2('ceiling_woman'), { opacity: 0 });
+    const piv = new THREE.Group(); piv.position.copy(apex.pos); piv.rotation.set(CEIL_TILT, apex.yaw, 0, 'YXZ');   // yaw to face down the hall, then tilt down; never rolled
+    const body = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 1.3), m); body.position.y = -0.65; body.renderOrder = 1;   // top-centre of the plane at the corner
+    piv.add(body); piv.visible = false; scene.add(piv);
+    const S = { on: false, phase: 'off', result: '', seen: false, seenT: 0, unobs: 0, dwell: 0, arm: false, leaving: false };
+    const end = (why) => { piv.visible = false; S.on = false; S.phase = 'off'; S.result = why; host.log(`ceiling:${why}`); };
+    return {
+      get busy() { return S.on; }, get result() { return S.result; },
+      start() {
+        if (S.on) return false;
+        Object.assign(S, { on: true, phase: 'wait', result: '', seen: false, seenT: 0, unobs: 0, dwell: 0, arm: false, leaving: false });
+        return true;
+      },
+      release() { S.leaving = true; },
+      update(dt) {
+        if (!S.on) return;
+        const o = host.observe(apex.pos, 1, lamp);                  // lamp-aware: dark while the lamp flickers
+        if (S.phase === 'wait') {
+          if (S.leaving) return end('missed');
+          if (lamp.level < 0.85 || lamp.flicker < 0.9 || o.obs) return;   // the lamp must be on and nobody looking at the corner
+          piv.visible = true; S.phase = 'live'; host.tension(0.1); host.log('ceiling:spawn');
+        }
+        m.opacity = clamp(lamp.level, 0, 1) * clamp(lamp.flicker, 0, 1);
+        if (o.obs) {
+          S.unobs = 0; if ((S.seenT += dt) > 0.15) S.seen = true;
+          S.dwell = host.gaze(o) ? S.dwell + dt : Math.max(0, S.dwell - 2 * dt);
+          if (!S.arm && S.dwell > CEIL_GAZE_MAX && host.deny(apex.pos, o.d, lamp.id)) S.arm = true;   // that lamp flickers
+        } else {
+          S.seenT = 0; S.unobs += dt;
+          if (S.leaving || (S.arm && lamp.flicker < 0.3) || (S.seen && S.unobs > CEIL_GONE_AFTER)) end(S.arm ? 'flicker' : S.seen ? 'gone' : 'left');
+        }
+      },
+      status: () => `${S.phase} ${S.seen ? 'seen' : '-'} dwell ${S.dwell.toFixed(1)}`,
+    };
+  })();
+
+  // ---- 3. the sobbing woman at the open lodge window ----------------------------------------------------------------
+  // Sobbing is audible first (audio.sobber, from the beat's start). She is in the dark window from the start, but is only made out
+  // as a gaze dwells on it (the eyes adjust: a fade, not a pop). Watched on, the sobbing stops dead, a beat of silence, the head
+  // snaps round (a hard map swap, the one deliberate change under observation, like the creature's smile), a sting, a short
+  // hold, then she is simply gone. Nobody looks: the sobbing fades after the window and nothing was seen.
+  R.sob = (() => {
+    const maps = [T2('sob_back'), T2('sob_turn')];
+    const m = mat(maps[0], { opacity: 0 });
+    const body = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), m); body.renderOrder = 1; body.scale.setScalar(SOB_SCALE); body.visible = false;
+    const S = { on: false, phase: 'off', result: '', a: null, voice: null, t: 0, limit: 0, dwell: 0, show: 1.2, turn: 2.5, revealed: false, leaving: false, tick: 0 };
+    const gaze = new V3(), vp = new V3();
+    const end = (why) => { S.a.group.remove(body); body.visible = false; S.on = false; S.phase = 'off'; S.result = why; host.log(`sob:${why}`); };
+    return {
+      get busy() { return S.on; }, get result() { return S.result; },
+      start(b) {
+        if (S.on) return false;
+        const a = world.anchors.windows.find((w) => w.id === b.anchor);
+        if (!a) return false;
+        Object.assign(S, { on: true, phase: 'sob', result: '', a, t: 0, dwell: 0, show: rnd(...SOB_SHOW), turn: rnd(...SOB_TURN), revealed: false, leaving: false, tick: 0 });
+        a.group.updateWorldMatrix(true, false); a.group.add(body); body.position.set(...SOB_LOCAL); body.visible = true; m.map = maps[0]; m.opacity = 0;
+        gaze.set(...SOB_LOCAL).applyMatrix4(a.group.matrixWorld);
+        vp.copy(a.interior).addScaledVector(a.normal, -0.5).setY(1.1);   // the voice comes from inside the room
+        S.voice = A.sobber(vp);
+        return true;
+      },
+      release() { S.leaving = true; },
+      update(dt) {
+        if (!S.on) return;
+        S.t += dt;
+        const o = host.observe(gaze), inRange = o.d >= SOB_RANGE[0] && o.d <= SOB_RANGE[1];
+        if (S.phase === 'sob') {
+          S.dwell = inRange && host.gaze(o) ? S.dwell + dt : Math.max(0, S.dwell - 2 * dt);
+          if (S.dwell >= S.show) S.revealed = true;
+          m.opacity = S.revealed ? Math.min(1, m.opacity + dt * 2.5) : 0;
+          if ((S.tick -= dt) <= 0) { S.tick = 0.08; body.position.set(SOB_LOCAL[0] + rnd(-0.003, 0.003), SOB_LOCAL[1] + rnd(-0.003, 0.003), SOB_LOCAL[2]); }   // the shaking of her shoulders
+          if (S.revealed && S.dwell >= S.turn) {
+            if (S.voice) S.voice.stop(); S.voice = null;                              // stops dead
+            body.position.set(...SOB_LOCAL); S.phase = 'silence'; S.t = 0; S.limit = rnd(...SOB_SILENCE);
+          } else if (S.leaving) {
+            if (S.voice) S.voice.fade(SOB_FADE); S.voice = null;
+            if (!S.revealed || !o.obs) end('faded');
+          }
+        } else if (S.phase === 'silence') {
+          if (S.t >= S.limit) {
+            m.map = maps[1]; m.opacity = 1; snd['sob-sting'](vp); host.tension(0.25); host.log('sob:turn');   // the head snaps round
+            S.phase = 'turned'; S.t = 0; S.limit = rnd(...SOB_HOLD);
+          }
+        } else if (S.t >= S.limit) end('turned');                                    // then simply gone (a cut)
+      },
+      status: () => `${S.phase} dwell ${S.dwell.toFixed(1)}${S.revealed ? ' shown' : ''}`,
+    };
+  })();
+
+  // ---- 4. the forest wraith: a long sigh crossing the path, a faint pale shape between the trunks -----------------------
+  R.wraith = (() => {
+    const m = mat(T2('wraith'), { opacity: 0 });
+    const body = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 2.6), m); body.renderOrder = 1; body.visible = false; scene.add(body);
+    const S = { on: false, result: '', x: 0, z: 0, vx: 0, vz: 0, y: 1.6, t: 0, dur: 4, dwell: 0, gone: 0, sigh: null };
+    const end = (why) => { body.visible = false; S.on = false; S.result = why; host.log(`wraith:${why}`); };
+    return {
+      get busy() { return S.on; }, get result() { return S.result; },
+      start() {
+        if (S.on) return false;
+        const f = fwdH(), sgn = Math.random() < 0.5 ? -1 : 1, a = rnd(...WRAITH_BEARING) * D2R * sgn, c = Math.cos(a), s = Math.sin(a);
+        const d = rnd(WRAITH_DIST[0], Math.min(WRAITH_DIST[1], Math.max(WRAITH_DIST[0], 1.3 / scene.fog.density)));   // thick fog (the gate) brings it nearer, or nothing would show
+        const rx = f.x * c - f.z * s, rz = f.x * s + f.z * c, v = rnd(...WRAITH_SPEED);   // starts outside the view cone and drifts across toward the gaze
+        Object.assign(S, { on: true, result: '', x: camera.position.x + rx * d, z: camera.position.z + rz * d, vx: sgn * rz * v, vz: -sgn * rx * v, y: rnd(1.5, 1.8), t: 0, dur: rnd(...WRAITH_TIME), dwell: 0, gone: 0 });
+        S.sigh = A.sigh({ x: S.x, y: S.y, z: S.z }, S.dur);
+        body.scale.x = sgn; body.visible = true; m.opacity = 0; body.position.set(S.x, S.y, S.z);
+        return true;
+      },
+      release() {},
+      update(dt) {
+        if (!S.on) return;
+        S.t += dt; S.x += S.vx * dt; S.z += S.vz * dt;
+        body.position.set(S.x, S.y, S.z); faceCamera(body); body.rotation.z = Math.sin(S.t * 0.9) * 0.04;
+        if (S.sigh) S.sigh.move(S.x, S.y, S.z);
+        const o = host.observe(body.position), tr = fogTr(o.d);
+        if (S.t > S.dur || player.zone !== 'forest') return end('done');
+        S.dwell = o.obs && host.gaze(o) ? S.dwell + dt : Math.max(0, S.dwell - 2 * dt);
+        if (S.dwell > WRAITH_GAZE_MAX || o.d < WRAITH_DIST[0] - 3) S.gone += dt;   // gazed at (or too near): gone within a quarter second, for good
+        const fade = clamp(S.t / 1.2, 0, 1) * clamp((S.dur - S.t) / 0.8, 0, 1) * (1 - clamp(S.gone / 0.25, 0, 1));
+        m.opacity = clamp(WRAITH_FOG_GAIN * tr * tr, 0, 0.85) * fade;
+        if (S.gone > 0.25) end('gazed');
+      },
+      status: () => `${S.t.toFixed(1)}/${S.dur.toFixed(1)}s dwell ${S.dwell.toFixed(1)} op ${m.opacity.toFixed(2)}`,
+    };
+  })();
+
+  // ---- 5. the barely-seen crossers: a dash across a gap, behind a pane, visible a fraction of a second ----------------------
+  // Spawn in peripheral view, beyond CROSS_DIST[0], never inside the gaze cone; dash along the plane's own u axis (fixed
+  // orientation, never re-billboarded); if the gaze swings onto it, it is gone that frame. Its sound comes first.
+  R.crosser = (() => {
+    const defs = { run: ['crosser_run', 1.6, 1.8], low: ['crosser_low', 1.8, 0.45] };
+    const slots = {};
+    for (const [k, [name, w, h]] of Object.entries(defs)) {
+      const cm = mat(T2(name), { opacity: 0 }), o = new THREE.Mesh(new THREE.PlaneGeometry(w, h), cm), g = new THREE.Group();
+      o.position.y = h / 2; o.renderOrder = 1; g.add(o); g.visible = false; scene.add(g); slots[k] = { g, m: cm };
+    }
+    const wm = mat(T2('crosser_window'), { opacity: 0 }), wo = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 1.0), wm); wo.renderOrder = 1; wo.visible = false;
+    slots.window = { g: wo, m: wm };
+    const S = { on: false, phase: 'off', result: '', kind: '', t: 0, lead: 0, dur: 0, x: 0, z: 0, ux: 0, uz: 0, dir: 1, L: 0, ry: 0, a: null };
+    const end = (why) => { const s = slots[S.kind]; s.g.visible = false; s.m.opacity = 0; if (S.a) S.a.group.remove(wo); S.a = null; S.on = false; S.phase = 'off'; S.result = why; host.log(`crosser:${why}`); };
+    function pickGround(kind) {
+      const f = fwdH(), cam = camera.position, L = rnd(...CROSS_LEN[kind]), h = kind === 'run' ? 1.0 : 0.25;
+      for (let i = 0; i < CROSS_TRIES; i++) {
+        const a = rnd(...CROSS_ANGLE) * D2R * (Math.random() < 0.5 ? -1 : 1), d = rnd(...CROSS_DIST), c = Math.cos(a), s = Math.sin(a);
+        const x = cam.x + (f.x * c - f.z * s) * d, z = cam.z + (f.x * s + f.z * c) * d, ry = Math.atan2(cam.x - x, cam.z - z);
+        const ux = Math.cos(ry), uz = -Math.sin(ry), dir = Math.random() < 0.5 ? -1 : 1, x0 = x - ux * dir * L / 2, z0 = z - uz * dir * L / 2;
+        if (clear(x0, h, z0) && clear(x, h, z) && clear(x + ux * dir * L / 2, h, z + uz * dir * L / 2)) return { x: x0, z: z0, ux, uz, dir, L, ry };
+      }
+      return null;
+    }
+    function pickWindow() {
+      const cam = camera.position, f = fwdH(), c = [];
+      for (const a of world.anchors.windows) {
+        if (a.reserved || a.zone !== player.zone || host.beatOwns(a.id)) continue;
+        const dx = a.pos.x - cam.x, dz = a.pos.z - cam.z, d = Math.hypot(dx, dz);
+        if (d < CROSS_DIST[0] || d > CROSS_DIST[1] + 6 || dx * a.normal.x + dz * a.normal.z >= 0) continue;   // in range and facing us
+        const ang = Math.acos(clamp((f.x * dx + f.z * dz) / d, -1, 1)) / D2R;
+        if (ang >= CROSS_ANGLE[0] && ang <= CROSS_ANGLE[1] && clear(a.pos.x, a.pos.y, a.pos.z)) c.push(a);
+      }
+      return c.length ? c[(Math.random() * c.length) | 0] : null;
+    }
+    const cue = (kind, x, z, ux, uz) => {   // its sound, a fraction before it shows
+      if (kind === 'window') { A.playAt({ x, y: 1.6, z }, (c, out, t) => { knockOne(out, t, 0.14); knockOne(out, t + 0.17, 0.1); }, 0.8); return; }
+      const surf = surfNow(), q = { x, y: 0.1, z };
+      for (let i = 0; i < 5; i++) later(() => {
+        q.x += ux * 0.9; q.z += uz * 0.9;
+        A.playAt({ ...q }, (c, out, t) => (kind === 'run' ? A.stepSound(out, t, surf, 0.5) : A.noiseBurst(out, t, { type: 'bandpass', freq: 2800, q: 2, dur: 0.05, gain: 0.35 })), 0.5);
+      }, i * (kind === 'run' ? 0.09 : 0.07));
+    };
+    return {
+      get busy() { return S.on; }, get result() { return S.result; },
+      start() {
+        if (S.on) return false;
+        const win = pickWindow(), kind = win && Math.random() < 0.45 ? 'window' : Math.random() < 0.6 ? 'run' : 'low', g = kind === 'window' ? null : pickGround(kind);
+        if (kind !== 'window' && !g && !win) return false;                                     // no open gap in the periphery just now
+        const k = g ? kind : 'window';
+        Object.assign(S, { on: true, phase: 'lead', result: '', kind: k, t: 0, lead: rnd(...CROSS_LEAD), dur: rnd(...CROSS_TIME), a: null });
+        if (k === 'window') {
+          S.a = win; S.dir = Math.random() < 0.5 ? -1 : 1; S.L = CROSS_LEN.window[0]; S.dur = rnd(0.35, CROSS_TIME[1]);
+          cue(k, win.pos.x, win.pos.z, 0, 0);
+        } else {
+          Object.assign(S, g); S.dir = g.dir; cue(k, g.x, g.z, g.ux * g.dir, g.uz * g.dir);
+        }
+        return true;
+      },
+      release() {},
+      update(dt) {
+        if (!S.on) return;
+        S.t += dt;
+        const sl = slots[S.kind];
+        if (S.phase === 'lead') {
+          if (S.t < S.lead) return;
+          if (S.kind === 'window') { S.a.group.updateWorldMatrix(true, false); S.a.group.add(wo); }
+          S.phase = 'run'; S.t = 0; sl.g.visible = true; sl.g.scale.x = S.dir;
+          if (S.kind !== 'window') { sl.g.position.set(S.x, 0, S.z); sl.g.rotation.y = S.ry; }
+        }
+        const k = S.t / S.dur;
+        if (k >= 1) return end('done');
+        if (S.kind === 'window') sl.g.position.set(S.dir * S.L * (k - 0.5), -0.3, 0.065);   // local to the window group, along its u axis
+        else sl.g.position.set(S.x + S.ux * S.dir * S.L * k, 0, S.z + S.uz * S.dir * S.L * k);
+        sl.m.opacity = Math.min(1, S.t / 0.05, (S.dur - S.t) / 0.07) * 0.95;
+        const p = S.kind === 'window' ? _e.set(S.a.pos.x, S.a.pos.y, S.a.pos.z) : _e.set(sl.g.position.x, 1.0, sl.g.position.z);
+        if (host.observe(p).cos > cosCross) end('gazed');                                      // the gaze swung onto it: gone that frame
+      },
+      status: () => `${S.kind} ${S.phase} ${S.t.toFixed(2)}/${S.dur.toFixed(2)}s`,
+    };
+  })();
+
+  const r2 = {
+    get busy() { return Object.values(R).some((x) => x.busy); },
+    start: (name, spec) => R[name].start(spec),
+    release: (name) => R[name].release(),
+    running: (name) => R[name].busy,
+    result: (name) => R[name].result,
+    status: () => Object.entries(R).filter(([, x]) => x.busy).map(([k, x]) => `${k}: ${x.status()}`).join(' | ') || '-',
+  };
   return {
-    audio: snd, visual, steps,
+    audio: snd, visual, steps, r2,
     onPlayerStep: () => steps.onPlayerStep(),
     update(dt) {
       now += dt;
       for (let i = timers.length - 1; i >= 0; i--) if (timers[i].at <= now) { const f = timers[i].fn; timers.splice(i, 1); f(); }
       steps.update(dt);
+      for (const x of Object.values(R)) x.update(dt);
     },
   };
 }
