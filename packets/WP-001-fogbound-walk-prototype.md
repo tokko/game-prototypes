@@ -1,7 +1,9 @@
 # WP-001 Fogbound Walk prototype
 
 Status:
-ready
+claimed
+Claimed by: RUN-20261119-01 (coordinator session, Claude Code)
+Claimed at: 2026-11-19T07:15Z
 
 ## Outcome
 
