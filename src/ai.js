@@ -1,5 +1,5 @@
 // Enemy AI: holds a line around the village, advances when the player closes, cavalry hunts exposed targets.
-import { rangeTo } from './units.js';
+import { rangeTo, detachLight, recallLight } from './units.js';
 import { VILLAGE } from './terrain.js';
 
 const R = Math.random;
@@ -17,8 +17,13 @@ export class EnemyAI {
       const lost = w.stats.lost.enemy > 150;
       if (near || lost || w.time > 420) this.advance = true;
     }
+    if (!this.screened || (this.advance && !this.screenedAdv)) {   // battle start / lines advance: each line regiment sends out its light company
+      this.screened = true; this.screenedAdv = this.advance;
+      for (const r of [...w.regs]) if (r.side === 'enemy') detachLight(w, r);
+    }
     for (const r of w.regs) {
       if (r.side !== 'enemy' || r.state === 'gone' || r.state === 'routing') continue;
+      if (!r.ai) r.ai = { home: { x: r.x, z: r.z, f: r.facing }, next: R() * 1.5 };
       r.ai.next -= dt;
       if (r.ai.next > 0) continue;
       r.ai.next = 1.0 + R() * 0.5;
@@ -54,6 +59,15 @@ export class EnemyAI {
       if (nd < def.range * 1.5 && homeD < lim) r.cmdAttack(near, false);
       else if (homeD > 15 && r.order.type === 'idle') this.goHome(r);
       else if (homeD >= lim && r.order.type !== 'move') this.goHome(r);
+    } else if (def.light) {
+      // screen ~40m ahead of the parent line; fire on targets in reach, recall when cavalry closes or the line goes to melee
+      const p = r.parent;
+      if (!p || !p.active) { if (nd < def.range * 1.5) r.cmdAttack(near, false); return; }
+      if (r.recall) return;
+      if (foes.some(f => f.def.cav && f.active && Math.hypot(f.x - r.x, f.z - r.z) < 170) || p.engaged > 0 || this.nearest(p, foes)[1] < 45) { recallLight(this.w, r); return; }
+      const sx = p.x + Math.sin(p.facing) * (p.halfD + 40), sz = p.z + Math.cos(p.facing) * (p.halfD + 40), away = Math.hypot(r.x - sx, r.z - sz);
+      if (nd < def.range * 1.5 && away < 60) r.cmdAttack(near, false);
+      else if (away > 25 && r.order.type !== 'move') r.cmdMove(sx, sz, p.facing, null, false);
     } else if (def.cav) {
       if (r.order.type === 'attack' && r.order.target && r.order.target.state !== 'gone' && r.run) return;
       let best = null, bs = 25;
@@ -64,7 +78,7 @@ export class EnemyAI {
         const fd = (Math.sin(f.facing) * (r.x - f.x) + Math.cos(f.facing) * (r.z - f.z)) / d;
         if (f.state === 'routing') s += 60;
         if (f.def.id === 'artillery') s += 45;
-        if (f.def.id === 'rifle') s += 35;
+        if (f.def.loose) s += 35;
         if (fd < 0.2) s += 40; else s -= 30;
         if (f.def.antiCav) s -= 90;
         if (f.def.cav) s -= 10;

@@ -12,6 +12,9 @@ export const TYPES = {
   // skirmishers: open order, individual aimed fire (reload is per man), seek cover / go prone, evade close infantry and cavalry
   rifle: { id: 'rifle', name: 'Riflemen', short: 'Rifles', men: 60, formation: 'grid', ranks: 4, sx: 6, sz: 5, kind: 'rifle', loose: true,
     walk: 4.5, run: 7.5, turn: 1.8, range: 280, reload: 22, acc: 0.45, arc: 1.2, fireFrac: 1.0, ma: 2, md: 2.5, charge: 0.05, morale: 70, frag: 1.6, meleeMorale: 2 },
+  // light company detached from a line regiment: same skirmisher machinery (loose), smoothbore musket stats, line-infantry model
+  light: { id: 'light', name: 'Light Company', short: 'Light Coy', men: 16, formation: 'grid', ranks: 2, sx: 6, sz: 5, kind: 'line', loose: true, light: true,
+    walk: 4.5, run: 7.5, turn: 1.8, range: 150, reload: 8, acc: 0.22, arc: 1.2, fireFrac: 1.0, ma: 2, md: 2.5, charge: 0.05, morale: 70, frag: 1.6, meleeMorale: 2 },
   pike: { id: 'pike', name: 'Pike & Shot Tercio', short: 'Tercio', men: 260, formation: 'tercio', pikeFrac: 0.62, sx: 1.15, sz: 1.35, msx: 1.15, msz: 1.6,
     walk: 2.8, run: 4.5, turn: 0.7, range: 110, reload: 11, acc: 0.11, arc: 1.0, fireFrac: 1.0, ma: 7, md: 9, charge: 0.05, antiCav: true, morale: 90, frag: 1.2 },
   lcav: { id: 'lcav', name: 'Light Cavalry', short: 'Hussars', men: 60, formation: 'grid', ranks: 3, sx: 1.6, sz: 3.4, kind: 'lrider', cav: true, caracole: true,
@@ -77,10 +80,10 @@ function coverGrid(th) {
 }
 
 export class Regiment {
-  constructor(id, side, typeId, name, x, z, facing) {
+  constructor(id, side, typeId, name, x, z, facing, men) {
     this.id = id; this.side = side; this.typeId = typeId; this.def = TYPES[typeId]; this.name = name;
     this.x = x; this.z = z; this.facing = facing;
-    this.maxMen = this.def.men; this.men = this.maxMen;
+    this.maxMen = men || this.def.men; this.men = this.maxMen;
     this.morale = this.def.morale; this.state = 'steady';
     this.order = { type: 'idle' }; this.run = false; this.fireAtWill = true;
     this.speedNow = 0; this.moving = false; this.selected = false;
@@ -89,7 +92,7 @@ export class Regiment {
     this.engaged = 0; this.contacts = []; this.prevContacts = new Set(); this.meleeAcc = 0;
     this.lastHit = -99; this.spacing = 1; this.formationMode = 'normal';
     this.guns = 0; this.dirty = true; this.group = 0;
-    this.evading = false; this.evadeT = 0; this.stillT = 0; this.coverOn = false; this.coverFace = 0; this.coverExt = null;   // skirmisher state
+    this.cavThreat = null; this.evading = false; this.evadeT = 0; this.stillT = 0; this.coverOn = false; this.coverFace = 0; this.coverExt = null;   // skirmisher state
     this.soldiers = [];
     const np = this.def.formation === 'tercio' ? Math.round(this.maxMen * this.def.pikeFrac) : 0;
     for (let i = 0; i < this.maxMen; i++) {
@@ -156,14 +159,18 @@ export class Regiment {
   cmdHalt() { if (this.state === 'routing') return; this.order = { type: 'idle' }; this.run = false; }
 
   // ---- movement (called every sim step)
-  // skirmishers fall back from close enemy infantry / cavalry (not other skirmishers or guns), then resume their order
+  // skirmishers fall back from close enemy infantry (not other skirmishers or guns), then resume their order.
+  // Cavalry cannot be outrun: charging horse within ~120m sets cavThreat instead, and the unit stands (men in cover stay,
+  // the rest run to cover or bunch into rallying clumps, see update/updateSoldiers)
   evadeCheck(w, dt) {
-    let bd = 1e9, th = null;
+    let bd = 1e9, th = null, cd = 1e9, cav = null;
     for (const e of w.regs) {
       if (e.side === this.side || !e.active || e.def.loose || e.def.id === 'artillery') continue;
-      const d = Math.max(0, edgeDist(e, this.x, this.z) - this.halfD * 0.5), lim = (e.def.cav ? 90 : 70) + (this.evading ? 35 : 0);
-      if (d < lim && d < bd) { bd = d; th = e; }
+      const d = Math.max(0, edgeDist(e, this.x, this.z) - this.halfD * 0.5);
+      if (e.def.cav) { if (d < 120 + (this.cavThreat ? 20 : 0) && e.moving && d < cd) { cd = d; cav = e; } continue; }
+      if (d < 70 + (this.evading ? 35 : 0) && d < bd) { bd = d; th = e; }
     }
+    this.cavThreat = cav;
     if (th) {
       let dx = this.x - th.x, dz = this.z - th.z; const l = Math.max(1, Math.hypot(dx, dz));
       dx = dx / l; dz = dz / l + (this.side === 'player' ? 0.6 : -0.6); const l2 = Math.hypot(dx, dz);
@@ -202,9 +209,10 @@ export class Regiment {
   }
 
   update(dt, w) {
+    if (this.def.light) lightTick(this, w);
     if (this.state === 'gone') { if (this.coverOn) this.releaseCover(); return; }
     const def = this.def;
-    if (def.loose) { if (this.state !== 'routing') this.evadeCheck(w, dt); else this.evading = false; }
+    if (def.loose) { if (this.state !== 'routing' && !this.recall) this.evadeCheck(w, dt); else this.evading = false; }
     let dest = null, maxSp = 0, wantFace = null, stopAt = 0.8, crab = false;
     if (this.state === 'routing') {
       const ez = this.side === 'player' ? HALF - 4 : -HALF + 4;
@@ -236,6 +244,8 @@ export class Regiment {
       }
     }
     if (this.evading && this.state !== 'routing') { dest = [this.x + this.evadeDir[0] * 60, this.z + this.evadeDir[1] * 60]; maxSp = def.run; stopAt = 1; wantFace = null; crab = false; }
+    const hold = !!this.cavThreat && !this.evading && this.state !== 'routing';   // facing charging cavalry: stand, take cover / clump
+    if (hold) { dest = null; crab = false; wantFace = Math.atan2(this.cavThreat.x - this.x, this.cavThreat.z - this.z); }
     // artillery: limber / deploy
     let blocked = false;
     if (def.id === 'artillery') {
@@ -272,7 +282,7 @@ export class Regiment {
     if (this.state !== 'routing') { this.x = clamp(this.x, -HALF + 6, HALF - 6); this.z = clamp(this.z, -HALF + 6, HALF - 6); }
     this.moving = this.speedNow > 0.4;
     if (def.loose) {   // cover: settle in after standing still for a moment; give it up as soon as the unit moves
-      if (this.moving || this.evading || this.order.type === 'move' || this.state === 'routing') { this.stillT = 0; if (this.coverOn) this.releaseCover(); }
+      if (!hold && (this.moving || this.evading || this.order.type === 'move' || this.state === 'routing')) { this.stillT = 0; if (this.coverOn) this.releaseCover(); }
       else if ((this.stillT += dt) > 1.2 && (!this.coverOn || Math.abs(wrapAngle(this.facing - this.coverFace)) > 0.6) && this.layout) this.assignCover(w);
     }
     if (this.state === 'routing' && Math.abs(this.z) > HALF - 8 && (this.side === 'player') === (this.z > 0)) { this.state = 'gone'; this.fled = true; }
@@ -281,8 +291,17 @@ export class Regiment {
   updateSoldiers(dt, time) {
     if (this.dirty) this.updateLayout();
     const routing = this.state === 'routing';
+    // cavalry bearing down: men not in cover bunch into rallying clumps (~14m cells, ~4-8 men) around their shared centre
+    const hold = !!this.cavThreat && !this.evading && !routing, cl = new Map();
+    if (hold) for (const s of this.soldiers) {
+      if (this.coverOn && s.cover) { s.ck = -1; continue; }
+      const b = this.slotBase(s), k = s.ck = Math.floor(b[0] / 14) * 4096 + Math.floor(b[1] / 14);
+      const c = cl.get(k) || cl.set(k, { x: 0, z: 0, n: 0 }).get(k); c.x += b[0]; c.z += b[1]; c.n++;
+    }
     for (const s of this.soldiers) {
-      const t = this.slotWorld(s);
+      const cc = hold && s.ck !== -1 ? cl.get(s.ck) : null;
+      s.clump = cc && cc.n >= 3 ? [cc.x / cc.n + s.jx * 1.6, cc.z / cc.n + s.jz * 1.6] : null;
+      const t = s.clump || this.slotWorld(s);
       const dx = t[0] - s.x, dz = t[1] - s.z, d = Math.hypot(dx, dz);
       if (d > 0.02) {
         const sp = this.speedNow * 1.1 + 1.0 + d * 1.0 + (routing ? 3 : 0);
@@ -295,7 +314,7 @@ export class Regiment {
       s.yaw += wrapAngle(want - s.yaw) * Math.min(1, dt * 8);
       if (loose) {   // pose target: stand while moving; kneel behind cover or lie prone in the open once settled
         s.still = s.mv || routing || this.evading ? 0 : s.still + dt;
-        s.pwant = s.still > s.pd ? (s.cover ? 1 : 2) : 0;
+        s.pwant = s.still > s.pd ? (s.cover || s.clump ? 1 : 2) : 0;
       }
     }
   }
@@ -341,12 +360,17 @@ export class UnitRenderer {
     this.bannerGroup = new THREE.Group(); scene.add(this.bannerGroup);
     this.ringGroup = new THREE.Group(); scene.add(this.ringGroup);
     for (const r of world.regs) this.attach(r);
+    (world.regHooks = world.regHooks || []).push({ add: (r) => this.attach(r), remove: (r) => this.detach(r) });
     this.tmpV = new THREE.Vector3();
   }
   attach(r) {
     r.banner = new Banner(r); this.bannerGroup.add(r.banner.sprite);
     r.ring = new Ring(0xe8c860, 0.9); r.targetRing = new Ring(0xd03030, 0.8); r.destRing = new Ring(0xe8c860, 0.4);
     for (const g of [r.ring, r.targetRing, r.destRing]) this.ringGroup.add(g.mesh);
+  }
+  detach(r) {   // regiment removed from the world (merged / destroyed light company)
+    this.bannerGroup.remove(r.banner.sprite); r.banner.tex.dispose(); r.banner.sprite.material.dispose();
+    for (const g of [r.ring, r.targetRing, r.destRing]) { this.ringGroup.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose(); }
   }
   // a0..a3 -> iAnim: walk cycle (rad), gait (speed / walk speed), aim/charge pose 0..1, recoil 0..1
   put(key, x, y, z, yaw, s, v = 1, a0 = 0, a1 = 0, a2 = 0, a3 = 0, pose = 0) {
@@ -464,7 +488,7 @@ export function drawGlyph(ctx, typeId, cx, cy, size, color) {
   const u = size / 10;
   switch (typeId) {
     case 'line': for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) ctx.fillRect((c - 1.5) * 2.2 * u - u * 0.6, (r - 1) * 2.4 * u - u * 0.6, u * 1.2, u * 1.2); break;
-    case 'rifle': for (const [x, y] of [[-3, -2], [0, -3], [3, -1], [-2, 2], [2, 3]]) ctx.fillRect(x * u - u * 0.6, y * u - u * 0.6, u * 1.2, u * 1.2); break;
+    case 'rifle': case 'light': for (const [x, y] of [[-3, -2], [0, -3], [3, -1], [-2, 2], [2, 3]]) ctx.fillRect(x * u - u * 0.6, y * u - u * 0.6, u * 1.2, u * 1.2); break;
     case 'pike': for (let c = -2; c <= 2; c++) { ctx.beginPath(); ctx.moveTo(c * 2 * u, -4.5 * u); ctx.lineTo(c * 2 * u, 1.5 * u); ctx.stroke(); }
       ctx.fillRect(-5 * u, 1.5 * u, 10 * u, 3 * u); break;
     case 'lcav': ctx.beginPath(); ctx.moveTo(-4 * u, 3 * u); ctx.lineTo(0, -3 * u); ctx.lineTo(4 * u, 3 * u); ctx.stroke();
@@ -578,4 +602,56 @@ export function createArmies(world) {
     }
   }
   world.generals.push(new General('player', 70, 350), new General('enemy', 0, -260));
+}
+
+// ---- light companies: a line regiment detaches ~1/10 of its men as a skirmish screen; recall merges the survivors back
+export function addReg(w, r) { w.regs.push(r); for (const h of w.regHooks || []) h.add(r); }
+export function removeReg(w, r) {
+  const i = w.regs.indexOf(r); if (i < 0) return;
+  w.regs.splice(i, 1); r.selected = false; w.selection = w.selection.filter(q => q !== r);
+  if (r.coverOn) r.releaseCover();
+  if (r.parent && r.parent.light === r) r.parent.light = null;
+  for (const h of w.regHooks || []) h.remove(r);
+}
+export const lightOut = (p) => !!p.light && p.light.state !== 'gone';
+const lightFront = (p, d) => [p.x + Math.sin(p.facing) * (p.halfD + d), p.z + Math.cos(p.facing) * (p.halfD + d)];
+// instant (deployment): placed at the screen position at once; otherwise it spawns at the parent's front and walks out ~40m
+export function detachLight(w, p, instant = false) {
+  if (p.typeId !== 'line' || !p.active || p.men < 60 || lightOut(p)) return null;
+  const n = Math.max(10, Math.round(p.men / 10)), took = [];
+  for (let k = 0; k < n; k++) took.push(p.removeSoldier(p.soldiers.length - 1));
+  const [sx, sz] = lightFront(p, 6), [tx, tz] = lightFront(p, 40);
+  const l = new Regiment(w.regs.reduce((m, q) => Math.max(m, q.id), 0) + 1, p.side, 'light', `${p.name} Light Company`, sx, sz, p.facing, n);
+  l.setFiles(n / 2); l.updateLayout();
+  l.soldiers.forEach((s, k) => { s.x = took[k].x; s.z = took[k].z; s.yaw = took[k].yaw; });
+  l.parent = p; p.light = l;
+  addReg(w, l);
+  if (instant) { l.x = tx; l.z = tz; for (const s of l.soldiers) { const t = l.slotWorld(s); s.x = t[0]; s.z = t[1]; } }
+  else l.cmdMove(tx, tz, p.facing);
+  return l;
+}
+export function recallLight(w, l, instant = false) {
+  const p = l.parent;
+  if (!l.def.light || l.state === 'gone' || l.state === 'routing' || !p || !p.active) return false;
+  if (instant) mergeLight(w, l, true);
+  else { l.cmdMove(p.x, p.z, null, null, false); l.order.recall = true; l.recall = true; }
+  return true;
+}
+function mergeLight(w, l, instant) {
+  const p = l.parent;
+  l.releaseCover();
+  for (const s of l.soldiers) { s.aiming = false; s.tgt = null; s.pwant = 0; s.still = 0; p.soldiers.push(s); }
+  l.soldiers = []; l.men = 0; p.men = p.soldiers.length; p.dirty = true;
+  l.state = 'gone'; l.merged = true; l.selected = false; l.reaped = true; l.recall = false;
+  if (instant) removeReg(w, l); else w.later(0, () => removeReg(w, l));
+}
+// per-step upkeep for a light company (called from Regiment.update): remove it once gone, walk back to the parent and merge when recalled
+function lightTick(l, w) {
+  if (l.reaped) return;
+  if (l.state === 'gone') { l.reaped = true; w.later(0, () => removeReg(w, l)); return; }
+  if (!l.recall) return;
+  const p = l.parent;
+  if (!p || !p.active || l.state === 'routing' || !l.order.recall) { l.recall = false; if (l.order.recall) l.order = { type: 'idle' }; return; }
+  if (edgeDist(p, l.x, l.z) < 15) { mergeLight(w, l, false); return; }
+  l.cmdMove(p.x, p.z, null, null, false); l.order.recall = true;
 }

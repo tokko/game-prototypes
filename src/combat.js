@@ -53,7 +53,7 @@ export class Combat {
     }
     let rec = 0;
     if (since > 6) rec += 0.5;
-    if (since > 3) for (const g of w.generals) if (g.side === r.side && Math.hypot(g.x - r.x, g.z - r.z) < 120) rec += 0.7;
+    if (since > 3) for (const g of w.generals) if (g.side === r.side && !(g.downT > w.time) && Math.hypot(g.x - r.x, g.z - r.z) < 120) rec += 0.7;
     r.morale = Math.min(def.morale, r.morale + rec * dt);
     if (r.morale < 20) this.startRout(r);
     else if (r.morale < 45) r.state = 'wavering';
@@ -86,7 +86,7 @@ export class Combat {
       else if (!r.fireAtWill) continue;
       else { if (t.def.id === 'artillery') score *= 0.85; if (t.state === 'routing') score *= 1.4; }
       if (score < bs) { bs = score; best = t; }
-      if (d.id === 'rifle') {   // candidate list for the riflemen's individual target picks
+      if (d.loose) {   // candidate list for the riflemen's individual target picks
         (r.cands || (r.cands = [])).push({ t, dist, exp: t === exp, arc: Math.abs(wrapAngle(Math.atan2(t.x - r.x, t.z - r.z) - r.facing)) <= d.arc });
       }
     }
@@ -102,7 +102,7 @@ export class Combat {
     r.reloadT = Math.max(0, r.reloadT - dt);
     r.aimT -= dt;
     if (r.aimT <= 0) { r.aimT = 0.3 + R() * 0.2; this.acquire(r); }
-    if (def.id === 'rifle') { this.skirmish(r, dt); return; }   // riflemen fire individually, not in volleys
+    if (def.loose) { this.skirmish(r, dt); return; }   // riflemen fire individually, not in volleys
     const t = r.aimTarget;
     if (!t || !r.canShoot || r.reloadT > 0 || r.moving || r.engaged > 0) return;
     if (t.state === 'gone') { r.aimTarget = null; return; }
@@ -144,21 +144,40 @@ export class Combat {
     }
     return t._exp;
   }
-  // each rifleman runs his own reload timer, lines up his own shot (prefers guns and close targets) and fires alone
+  // officer / general shot down by a rifleman: extra morale hit, brief rate-limited message
+  officerDown(t) {
+    const w = this.w;
+    t.morale -= 5; t.lastHit = w.time;
+    if (w.time - (t._offT === undefined ? -99 : t._offT) > 10) { t._offT = w.time; w.msg(`Officer shot down - ${t.name}`, t.side); }
+  }
+  generalHit(g, r) {
+    const w = this.w;
+    if (g.downT > w.time) return;
+    g.downT = w.time + 25;   // wounded: no morale aura for a while
+    w.msg('General wounded by sharpshooters', g.side);
+    for (const f of w.regs) if (f.side === g.side && f.active && Math.hypot(f.x - g.x, f.z - g.z) < 120) { f.morale -= 6; f.lastHit = w.time; }
+  }
+  // each rifleman runs his own reload timer, lines up his own shot (prefers guns, the enemy general and close targets) and fires alone
   skirmish(r, dt) {
     const def = r.def, w = this.w, th = w.terrain;
     const can = !!r.cands && r.cands.length > 0 && !r.moving && r.engaged === 0 && !r.evading && r.state !== 'routing';
     for (const s of r.soldiers) {
       s.fireT = Math.max(-1, s.fireT - dt);
       if (s.fireT > 1.2 || !can || s.mv) { s.aiming = false; if (!can || s.mv) s.tgt = null; continue; }
-      const ok = (t) => t && t.state !== 'gone' && edgeDist(t, s.x, s.z) <= def.range * 1.05;
+      const ok = (t) => t && (t.def ? t.state !== 'gone' && edgeDist(t, s.x, s.z) <= def.range * 1.05 : !(t.downT > w.time) && Math.hypot(t.x - s.x, t.z - s.z) <= def.range);
       if (!ok(s.tgt)) {
         let best = null, bs = 1e9;
         for (const c of r.cands) {
           if (!c.arc || c.t.state === 'gone') continue;
           let sc = c.dist * (0.8 + R() * 0.4);
-          if (c.exp) sc *= 0.5; else if (c.t.def.id === 'artillery') sc *= 0.6; else if (c.t.state === 'routing') sc *= 1.4;
+          if (c.exp) sc *= 0.5; else if (def.id === 'rifle' && c.t.def.id === 'artillery') sc *= 0.4; else if (c.t.state === 'routing') sc *= 1.4;
           if (sc < bs) { bs = sc; best = c.t; }
+        }
+        for (const g of def.id === 'rifle' ? w.generals : []) {   // an enemy general in range and arc is the prize
+          if (g.side === r.side || g.downT > w.time) continue;
+          const gd = Math.hypot(g.x - s.x, g.z - s.z);
+          if (gd > def.range * 0.9 || Math.abs(wrapAngle(Math.atan2(g.x - s.x, g.z - s.z) - r.facing)) > def.arc) continue;
+          if (gd * 0.35 < bs) { bs = gd * 0.35; best = g; }
         }
         s.tgt = best;
       }
@@ -166,6 +185,13 @@ export class Combat {
       if (!ok(t)) { s.tgt = null; s.aiming = false; continue; }
       s.aiming = true; s.tyaw = Math.atan2(t.x - s.x, t.z - s.z);
       if (s.fireT > 0) continue;
+      if (!t.def) {   // general: small, distant target
+        const gd = Math.hypot(t.x - s.x, t.z - s.z);
+        this.fx.musket(s.x, th.heightAt(s.x, s.z) + (s.pwant >= 2 ? 0.35 : s.pwant >= 1 ? 0.8 : 1.3) * SCALE, s.z, (t.x - s.x) / Math.max(1, gd), (t.z - s.z) / Math.max(1, gd), 0.45);
+        s.shots++; s.aiming = false; s.tgt = null; s.fireT = def.reload * (0.8 + R() * 0.45);
+        if (R() < def.acc * 0.12 * clamp(1 - gd / (def.range * 1.2), 0.2, 1)) w.later(0.3 + R() * 0.4 + gd / 250, () => this.generalHit(t, r));
+        continue;
+      }
       // fire
       const d = edgeDist(t, s.x, s.z);
       const fall = clamp(1 - 0.3 * d / def.range, 0.6, 1);
@@ -181,7 +207,11 @@ export class Combat {
       this.fx.musket(sx, th.heightAt(sx, sz) + lift, sz, ux, uz, 0.45);
       s.shots++; s.aiming = false; s.tgt = null;
       s.fireT = def.reload * (0.8 + R() * 0.45);
-      if (R() < p) w.later(0.3 + R() * 0.4 + d / 250, () => { if (t.state !== 'gone' && t.men > 0) this.killMany(t, 1, 'shot', r); });
+      if (R() < p) w.later(0.3 + R() * 0.4 + d / 250, () => {
+        if (t.state === 'gone' || t.men <= 0) return;
+        this.killMany(t, 1, 'shot', r);
+        if (def.id === 'rifle' && !t.def.loose && t.def.id !== 'artillery' && t.state !== 'gone' && R() < 0.15) this.officerDown(t);   // rifle hit picks off an officer
+      });
     }
   }
 
@@ -306,6 +336,12 @@ export class Combat {
     const d = Math.max(1, Math.hypot(a.x - b.x, a.z - b.z));
     return (Math.sin(b.facing) * (a.x - b.x) + Math.cos(b.facing) * (a.z - b.z)) / d;
   }
+  // cavalry kill multiplier vs skirmishers, averaged over the men: scattered in the open x3, in a rallying clump x1.1, in cover x0.5
+  cavVsLoose(b) {
+    if (!b.def.loose || !b.soldiers.length) return 1;
+    let sum = 0; for (const s of b.soldiers) sum += b.coverOn && s.cover ? 0.5 : s.clump ? 1.1 : 3;
+    return sum / b.soldiers.length;
+  }
   impact(a, b) {
     const def = a.def;
     if (a.state === 'routing' || def.charge <= 0 || a.speedNow < def.run * 0.5) return;
@@ -319,7 +355,7 @@ export class Combat {
       a.morale -= 12; return;
     }
     const mult = f < -0.5 ? 2 : f <= 0.5 ? 1.5 : (b.def.cav ? 1 : 0.65);
-    this.killMany(b, Math.round(bonus * mult), 'charge', a);
+    this.killMany(b, Math.round(bonus * mult * (def.cav ? this.cavVsLoose(b) : 1)), 'charge', a);
     b.morale -= 8 * mult * (def.cav ? 1.5 : 0.6) * (b.state === 'wavering' ? 1.3 : 1);
   }
   meleeHit(a, b, dt) {
@@ -329,6 +365,7 @@ export class Combat {
     const f = this.relFront(b, a);
     const mult = f > 0.5 ? 1 : f < -0.5 ? 1.9 : 1.4;
     if (a.def.antiCav && b.def.cav && this.relFront(a, b) > 0.5) atk *= 2.6;
+    if (a.def.cav) atk *= this.cavVsLoose(b);
     b.meleeAcc += eng * 0.022 * atk / dfn * mult * dt;
     const k = Math.floor(b.meleeAcc);
     if (k > 0) { b.meleeAcc -= k; this.killMany(b, k, 'melee', a, 1.0); }

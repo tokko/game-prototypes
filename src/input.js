@@ -1,6 +1,6 @@
 // Mouse/keyboard: camera control, selection, orders, formation drag preview.
 import * as THREE from 'three';
-import { pointInOBB } from './units.js';
+import { pointInOBB, detachLight, recallLight, lightOut } from './units.js';
 import { layout } from './formations.js';
 
 export const Orders = {
@@ -17,6 +17,16 @@ export const Orders = {
       }
       if (best) r.cmdAttack(best);
     }
+  },
+  // light company: on a line regiment with none out -> detach one; on a light company (or its parent) -> recall it. Returns new companies.
+  light(sel, w, instant) {
+    const made = [];
+    for (const r of sel) {
+      const l = r.def.light ? r : lightOut(r) ? r.light : null;
+      if (l) recallLight(w, l, instant);
+      else if (r.typeId === 'line') { const n = detachLight(w, r, instant); if (n) made.push(n); }
+    }
+    return made;
   },
 };
 
@@ -249,6 +259,7 @@ export class Input {
       if (k === '-') this.world.speed = Math.max(0.5, this.world.speed / 2);
     }
     if (k === 'escape') this.select([], false);
+    if (k === 'k') { this.lightOrder(sel); return; }
     if (!this.canOrder) return;
     if (k === ' ' || k === 'h') Orders.halt(sel);
     else if (k === 'f') Orders.toggleFire(sel);
@@ -260,6 +271,11 @@ export class Input {
       if (e.ctrlKey) { this.groups[k] = [...sel]; e.preventDefault(); }
       else if (this.groups[k]) { this.select(this.groups[k], false); if (e.detail === 2) this.focusSel(); }
     }
+  }
+  // detach / recall light companies (battle: walks out / back; deployment: instant, clamped into the zone)
+  lightOrder(sel) {
+    if (!this.canOrder && !this.deploying) return;
+    for (const l of Orders.light(sel, this.world, this.deploying)) if (this.deploying) this.placeUnit(l, l.x, l.z, l.facing, null);
   }
   focusSel() {
     const s = this.world.selection; if (!s.length) return;

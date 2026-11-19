@@ -1,6 +1,6 @@
 // HUD: strength bar + flags, timer, objectives, minimap, general panel, unit cards, order buttons, deployment panel, messages, end screen.
 // All figures/icons are drawn on small canvases (no image assets). Layout/styling lives in style.css.
-import { SIDE_COLOR } from './units.js';
+import { SIDE_COLOR, lightOut } from './units.js';
 import { Orders } from './input.js';
 import { MAP, HALF, VILLAGE } from './terrain.js';
 
@@ -120,6 +120,7 @@ function cannon(ctx, team) {
 const FIGURES = {
   line: (ctx, t) => person(ctx, { x: 30, y: 79, s: 0.92, coat: t, hat: 'shako', weapon: 'musket', belts: true }),
   rifle: (ctx, t) => person(ctx, { x: 30, y: 79, s: 0.92, coat: shade(t, 0.8), hat: 'slouch', weapon: 'rifle', legs: '#47493a' }),
+  light: (ctx, t) => person(ctx, { x: 30, y: 79, s: 0.92, coat: t, hat: 'shako', weapon: 'musket', legs: '#47493a' }),
   pike: (ctx, t) => person(ctx, { x: 30, y: 79, s: 0.88, coat: t, hat: 'morion', weapon: 'pike', armor: true, legs: '#8a6a3a' }),
   lcav: (ctx, t) => { horse(ctx, t); person(ctx, { x: 30, y: 64, s: 0.62, coat: t, hat: 'busby', weapon: 'sabre', lace: true, legs: '#2a2e5a' }); },
   hcav: (ctx, t) => { horse(ctx, t); person(ctx, { x: 30, y: 64, s: 0.6, coat: t, hat: 'czapka', weapon: 'lance', belts: true }); },
@@ -207,6 +208,10 @@ function drawIcon(cv, name) {
     case 'attack': ctx.lineWidth = 4.5; line(ctx, 10, 54, 52, 12, 4.5, '#e8ecf0'); line(ctx, 54, 54, 12, 12, 4.5, '#e8ecf0');
       line(ctx, 14, 40, 24, 50, 4.5, GOLD); line(ctx, 50, 40, 40, 50, 4.5, GOLD); circle(ctx, 8, 56, 3.4, GOLD); circle(ctx, 56, 56, 3.4, GOLD); break;
     case 'all': for (const [x, y] of [[10, 10], [36, 10], [10, 36], [36, 36]]) ctx.fillRect(x, y, 18, 18); break;
+    case 'detach': for (const [x, y] of [[4, 18], [4, 34], [16, 26]]) ctx.fillRect(x, y, 9, 9); arrow(24, 42);
+      for (const [x, y] of [[48, 12], [54, 28], [46, 40], [56, 50]]) ctx.fillRect(x, y, 8, 8); break;
+    case 'recall': for (const [x, y] of [[4, 18], [4, 34], [16, 26]]) ctx.fillRect(x, y, 9, 9); arrow(46, 28);
+      for (const [x, y] of [[48, 12], [54, 28], [46, 40], [56, 50]]) ctx.fillRect(x, y, 8, 8); break;
     case 'pause': ctx.fillRect(14, 10, 12, 44); ctx.fillRect(38, 10, 12, 44); break;
     case 'play': poly(ctx, [[16, 8], [54, 32], [16, 56]], GOLD); break;
     case 'speed1': poly(ctx, [[14, 10], [50, 32], [14, 54]], GOLD); break;
@@ -228,7 +233,8 @@ export class UI {
     // unit cards
     this.cards = new Map();
     const box = $('cards');
-    for (const r of world.regs.filter(q => q.side === 'player')) {
+    const addCard = (r) => {
+      if (r.side !== 'player') return;
       const el = document.createElement('div'); el.className = 'card';
       el.innerHTML = '<div class="men"></div><canvas width="96" height="126"></canvas><div class="nm"></div><div class="bar hp"><i></i></div><div class="bar mo"><i></i></div>';
       el.querySelector('.nm').textContent = r.def.short;
@@ -236,9 +242,12 @@ export class UI {
       drawCardArt(el.querySelector('canvas'), r.typeId, SIDE_COLOR.player);
       el.addEventListener('click', e => world.select([r], e.shiftKey));
       el.addEventListener('dblclick', () => { world.select([r], false); rts.focusOn(r.x, r.z); });
-      box.appendChild(el);
+      const pc = r.parent && this.cards.get(r.parent);   // a light company's card sits right after its parent's
+      if (pc) pc.el.after(el); else box.appendChild(el);
       this.cards.set(r, { el, hp: el.querySelector('.hp i'), mo: el.querySelector('.mo i'), men: el.querySelector('.men') });
-    }
+    };
+    for (const r of world.regs) addCard(r);
+    (world.regHooks = world.regHooks || []).push({ add: addCard, remove: (r) => { const c = this.cards.get(r); if (c) { c.el.remove(); this.cards.delete(r); } } });
     // order buttons (only active in battle)
     const battle = (fn) => () => { if (game.phase === 'battle') fn(); };
     const bind = (id, icon, fn) => { const b = $(id); drawIcon(b.querySelector('canvas'), icon); b.onclick = battle(fn); };
@@ -248,6 +257,8 @@ export class UI {
     bind('o-tight', 'tight', () => Orders.formation(world.selection, 'tight'));
     bind('o-loose', 'loose', () => Orders.formation(world.selection, 'loose'));
     bind('o-attack', 'attack', () => Orders.attack(world.selection, world.regs));
+    drawIcon($('o-light').querySelector('canvas'), 'detach');
+    $('o-light').onclick = () => input.lightOrder(world.selection.filter(r => r.state !== 'gone'));   // battle or deployment
     // general's command buttons
     drawIcon($('g-all').querySelector('canvas'), 'all');
     $('g-all').onclick = () => world.select(world.regs.filter(r => r.side === 'player'), false);
@@ -309,6 +320,11 @@ export class UI {
       ['o-tight', some && sel.every(r => r.formationMode === 'tight')], ['o-loose', some && sel.every(r => r.formationMode === 'loose')]]) $(id).classList.toggle('on', !!v);
     this.setIcon('o-fire', some && sel.every(r => !r.fireAtWill) ? 'hold' : 'fire');
     for (const id of ['o-halt', 'o-fire', 'o-run', 'o-tight', 'o-loose', 'o-attack']) $(id).classList.toggle('off', phase !== 'battle');
+    // light company button: recall when a selected unit is a light company (or has one out), else detach (needs a selected line regiment with 60+ men)
+    const recall = sel.some(r => r.def.light || lightOut(r));
+    this.setIcon('o-light', recall ? 'recall' : 'detach');
+    $('o-light').classList.toggle('on', sel.some(r => r.recall));
+    $('o-light').classList.toggle('off', (phase !== 'battle' && phase !== 'deployment') || !(recall || sel.some(r => r.typeId === 'line' && r.men >= 60)));
     for (const id of ['g-pause', 'g-speed']) $(id).classList.toggle('off', phase !== 'battle');
     this.setIcon('g-pause', w.paused ? 'play' : 'pause');
     this.setIcon('g-speed', w.speed === 0.5 ? 'speedhalf' : w.speed >= 4 ? 'speed4' : w.speed >= 2 ? 'speed2' : 'speed1');
