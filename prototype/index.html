@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Halcyon Drift - orbital prototype</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "./src/main.js": "./src/main.js?v=r3", "./src/world.js": "./src/world.js?v=r3", "./src/orbits.js": "./src/orbits.js?v=r3",
+    "./src/bodies.js": "./src/bodies.js?v=r3", "./src/vessels.js": "./src/vessels.js?v=r3", "./src/autopilot.js": "./src/autopilot.js?v=r3",
+    "./src/models.js": "./src/models.js?v=r3", "./src/sky.js": "./src/sky.js?v=r3", "./src/map.js": "./src/map.js?v=r3",
+    "./src/hud.js": "./src/hud.js?v=r3", "./src/input.js": "./src/input.js?v=r3"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="maplabels"></div>
+
+<div id="hud">
+  <!-- objectives, top-left -->
+  <div id="objectives" class="panel">
+    <div class="title">Operation Lunar Harvest</div>
+    <ul id="objlist"></ul>
+    <div id="objhint"></div>
+  </div>
+
+  <!-- flight data, top-right -->
+  <div id="flight" class="panel">
+    <div class="row"><span>Altitude</span><b id="f-alt">-</b></div>
+    <div class="row"><span id="f-vlabel">Velocity</span><b id="f-vel">-</b></div>
+    <div class="row"><span>Apoapsis</span><b id="f-ap">-</b></div>
+    <div class="row"><span>Periapsis</span><b id="f-pe">-</b></div>
+    <div class="row sub" id="r-vs"><span>Vert. speed</span><b id="f-vs">-</b></div>
+    <div class="row sub"><span id="f-tlabel">Next apsis</span><b id="f-t">-</b></div>
+    <div class="row sub" id="r-tgt"><span>Target</span><b id="f-tgt">-</b></div>
+    <div class="row sub"><span>Influence</span><b id="f-soi">-</b></div>
+    <div class="row sub"><span>Universal time</span><b id="f-ut">-</b></div>
+  </div>
+
+  <!-- top-centre status -->
+  <div id="toasts"></div>
+  <div id="statusbar">
+    <div id="drivebox" class="panel"><div id="drv-arrow"></div><div id="drv-txt"></div></div>
+    <div id="warnchip"></div>
+    <div id="apchip"></div>
+    <div id="prompt"></div>
+    <div id="keyhint"></div>
+  </div>
+
+  <!-- navball, bottom-left -->
+  <div id="navwrap">
+    <div id="navspeed"><span id="n-mode">Orbit</span><b id="n-speed">-</b></div>
+    <div id="navball">
+      <div id="navshade"></div>
+      <svg id="navship" viewBox="0 0 100 100"><path d="M10 54 L38 54 L50 66 L62 54 L90 54" fill="none" stroke="#ffb347" stroke-width="3.4" stroke-linejoin="round"/><circle cx="50" cy="50" r="2.6" fill="#ffb347"/></svg>
+      <div id="navring"></div>
+    </div>
+    <div id="navhdg">HDG <b id="n-hdg">000</b></div>
+    <div id="throttle"><div id="thr-fill"></div><div id="thr-txt">0%</div></div>
+    <div id="sas">
+      <button data-sas="toggle" id="sas-toggle" title="T: toggle SAS">SAS</button>
+      <button data-sas="stab" title="1 Stability hold">STB</button>
+      <button data-sas="pro" title="2 Prograde">PRO</button>
+      <button data-sas="retro" title="3 Retrograde">RET</button>
+      <button data-sas="normal" title="4 Normal">NRM</button>
+      <button data-sas="antinormal" title="5 Anti-normal">ANM</button>
+      <button data-sas="radial" title="6 Radial out">RAD</button>
+      <button data-sas="antiradial" title="7 Radial in">RIN</button>
+      <button data-sas="target" title="8 Target">TGT</button>
+      <button data-sas="antitarget" title="9 Anti-target">ATG</button>
+    </div>
+  </div>
+
+  <!-- actions, bottom-centre -->
+  <div id="actions">
+    <div id="warpbox"><span id="warp-label">1x</span><span id="warp-sub">REAL TIME</span></div>
+    <div id="actbtns">
+      <button data-act="undock"><kbd>U</kbd>Undock</button>
+      <button data-act="xfer"><kbd>H</kbd>Xfer</button>
+      <button data-act="circ"><kbd>C</kbd>Circ</button>
+      <button data-act="land"><kbd>L</kbd>Land</button>
+      <button data-act="drill"><kbd>G</kbd>Drill</button>
+      <button data-act="refine"><kbd>R</kbd>Refine</button>
+      <button data-act="asc"><kbd>B</kbd>Ascend</button>
+      <button data-act="rdv"><kbd>V</kbd>Rdv</button>
+      <button data-act="cancel"><kbd>&#9003;</kbd>Cancel</button>
+      <button data-act="refuel"><kbd>Y</kbd>Refuel</button>
+      <button data-act="offload"><kbd>I</kbd>Ore out</button>
+      <button data-act="drive"><kbd>F</kbd>Drive</button>
+    </div>
+  </div>
+
+  <!-- vehicle, bottom-right -->
+  <div id="vehicle" class="panel">
+    <div id="vname"></div>
+    <div id="vmass"></div>
+    <div id="vtop">
+      <div id="vicon"></div>
+      <div id="vbars">
+        <div class="vb"><i id="b-fuel"></i><em>FUEL</em></div>
+        <div class="vb"><i id="b-ox"></i><em>OX</em></div>
+        <div class="vb"><i id="b-ore"></i><em>ORE</em></div>
+        <div class="vb"><i id="b-ec"></i><em>EC</em></div>
+        <div class="vb"><i id="b-heat"></i><em>HEAT</em></div>
+      </div>
+    </div>
+    <div id="vrates"><span id="r-ec">-</span><span id="r-heat">-</span></div>
+    <div id="vdep">
+      <button data-dep="panels" title="J: solar panels"><kbd>J</kbd>PNL</button>
+      <button data-dep="radiators" title="K: radiators"><kbd>K</kbd>RAD</button>
+      <button data-dep="gear" title="N: landing gear"><kbd>N</kbd>GEAR</button>
+      <button data-dep="auto" title="O: auto-retract panels/radiators when a burn exceeds 1.5 g"><kbd>O</kbd>AUTO</button>
+    </div>
+  </div>
+
+  <div id="helphint">F1 help &middot; M map &middot; F5 save &middot; F9 load</div>
+</div>
+
+<div id="help" class="overlay hidden">
+  <div class="card">
+    <h2>Controls</h2>
+    <div class="cols">
+      <div><b>Attitude</b><br>W/S pitch &middot; A/D yaw &middot; Q/E roll<br>T SAS on/off &middot; 1-9 SAS mode<br>
+      <b>Throttle</b><br>Shift/Ctrl up/down &middot; Z full &middot; X cut<br>
+      <b>Camera</b><br>Mouse drag orbit &middot; wheel zoom<br>M map &middot; Tab map focus<br>
+      <b>Vessel</b><br>[ ] switch vessel &middot; U undock</div>
+      <div><b>Time</b><br>, slower &middot; . faster &middot; P pause<br>
+      <b>Assists</b><br>H transfer to Pell (carrier)<br>C circularize at next apsis<br>L landing assist (lander)<br>B ascent + launch window (lander)<br>V rendezvous &amp; dock (auto-dock &lt;50 m, &lt;2 m/s)<br>Backspace cancel assist<br>
+      <b>Rover</b><br>F drive mode (landed, wheels down): W/S drive, A/D steer, Space brake<br><b>Surface / ISRU</b><br>G drill on a beacon ring &middot; R refine ore (landed or in orbit)<br>Docked: Y refuel lander &middot; I offload ore to the carrier<br>
+      <b>Power, heat, deployables (press while the vehicle you want is active)</b><br>J solar panels &middot; K radiators &middot; N landing gear / wheels<br>O auto-retract on burn (breaks above 1.5 g if off)<br>Drill/refinery need power (EC) and cooling.<br>
+      <b>Saves</b><br>F5 quicksave &middot; F9 quickload</div>
+    </div>
+    <p>Impacts over 5 m/s or tipping destroy the vessel. Press F1 to close.</p>
+  </div>
+</div>
+
+<div id="crash" class="overlay hidden">
+  <div class="card crashcard">
+    <h2 id="crash-title">Vessel lost</h2>
+    <p id="crash-reason"></p>
+    <div class="btns">
+      <button id="cr-load">Quickload (F9)</button>
+      <button id="cr-revert">Revert to before undock</button>
+      <button id="cr-restart">Restart flight</button>
+    </div>
+  </div>
+</div>
+
+<div id="loading">Initialising the system&hellip;</div>
+<script type="module" src="src/main.js?v=r3"></script>
+</body>
+</html>

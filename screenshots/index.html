@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veyra - screenshot contact sheet</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #070b12; color: #dfe8f5; font: 15px/1.5 "Bahnschrift", "Segoe UI", system-ui, sans-serif; }
+  header { padding: 28px 32px 8px; }
+  h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+  header p { margin: 6px 0 0; color: #8fa3bf; max-width: 80ch; }
+  main { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; padding: 20px 32px 40px; }
+  figure { margin: 0; grid-column: span 2; background: #0c121c; border: 1px solid #1b2636; border-radius: 10px; overflow: hidden; }
+  figure.wide { grid-column: span 3; }
+  figure a { display: block; }
+  img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; }
+  figcaption { padding: 10px 14px 12px; }
+  figcaption b { display: block; font-weight: 600; letter-spacing: .04em; }
+  figcaption span { color: #8fa3bf; font-size: 13px; }
+  @media (max-width: 900px) { figure, figure.wide { grid-column: span 6; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Veyra &middot; screenshot set</h1>
+  <p>Five 1920&times;1080 stills. Fleet: carrier <b>Meridian</b>, spaceplane <b>Kestrel</b>, lander <b>Heron</b>.
+     Places: ocean world Thalen, ringed gas giant Oruun and its airless moon Kesh, ore rock Dray-7 in the Sable Belt. Click a shot for full size.</p>
+</header>
+<main>
+  <figure class="wide"><a href="01_approach.png"><img src="01_approach.png" alt="Carrier Meridian approaching the ocean world Thalen"></a>
+    <figcaption><b>01 &middot; Approach Thalen</b><span>Meridian on its capture ellipse; orbit data top right.</span></figcaption></figure>
+  <figure class="wide"><a href="02_atmosphere.png"><img src="02_atmosphere.png" alt="Spaceplane Kestrel during atmospheric entry over Thalen"></a>
+    <figcaption><b>02 &middot; Atmospheric Entry</b><span>Kestrel in the entry corridor above Thalen.</span></figcaption></figure>
+  <figure><a href="03_touchdown.png"><img src="03_touchdown.png" alt="Lander Heron touching down on the moon Kesh under Oruun"></a>
+    <figcaption><b>03 &middot; Touchdown on Kesh</b><span>Heron setting down under ringed Oruun.</span></figcaption></figure>
+  <figure><a href="04_harvest.png"><img src="04_harvest.png" alt="Heron drilling ore on Dray-7 and refining it into fuel and oxidizer"></a>
+    <figcaption><b>04 &middot; Harvest &amp; Refine</b><span>Ore becomes fuel and oxidizer on Dray-7.</span></figcaption></figure>
+  <figure><a href="05_recovery.png"><img src="05_recovery.png" alt="Carrier Meridian recovering Kestrel into its hangar bay in orbit of Oruun"></a>
+    <figcaption><b>05 &middot; Recover Kestrel</b><span>Final approach to Meridian's hangar bay.</span></figcaption></figure>
+</main>
+</body>
+</html>
