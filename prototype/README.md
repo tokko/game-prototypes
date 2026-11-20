@@ -56,3 +56,12 @@ and restart.
 - `src/autopilot.js` circularize, transfer, landing, ascent, rendezvous assists.
 - `src/models.js`, `src/sky.js` procedural ships, skybox, planet/atmosphere, cratered moon, beacons.
 - `src/map.js`, `src/hud.js`, `src/input.js`, `src/main.js` map overlay, HUD + navball, controls, render loop.
+
+## Tests
+
+```
+cd prototype/test
+npm install
+node --import ./register.mjs t4.mjs   # headless full-loop sim, prints PASS
+node overlap.mjs                      # HUD overlap check (needs a static server on :8777 and local Chrome)
+```
