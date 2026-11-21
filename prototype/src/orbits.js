@@ -129,6 +129,16 @@ export function sampleConic(el, t0, t1, count, rLimit = Infinity) {
   return pts;
 }
 
+/** inertial delta-v vector of a maneuver node {t, dv:{pro, nrm, rad}} on orbit `el`.
+ *  Frame at node time: pro = velocity direction, nrm = orbit normal (r x v), rad = pro x nrm (radial out for circular orbits). */
+export function nodeDvVector(el, node, out = new Vector3(), state = { r: new Vector3(), v: new Vector3() }) {
+  const s = stateAt(el, node.t, state);
+  const pro = s.v.clone().normalize();
+  const nrm = new Vector3().crossVectors(s.r, s.v).normalize();
+  const rad = new Vector3().crossVectors(pro, nrm);
+  return out.set(0, 0, 0).addScaledVector(pro, node.dv.pro).addScaledVector(nrm, node.dv.nrm).addScaledVector(rad, node.dv.rad);
+}
+
 export const circularSpeed = (mu, r) => Math.sqrt(mu / r);
 
 /** construct circular orbit elements around a body: radius r, phase angle (rad), prograde (+Z normal) */

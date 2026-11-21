@@ -5,10 +5,10 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { BODIES, SUN_DIR } from './bodies.js';
+import { BODIES, SUN_DIR, isMoon } from './bodies.js';
 import { World, WARP } from './world.js';
 import { DOCK_OFFSET, DOCK_ROT, DEP_NAMES } from './vessels.js';
-import { engageAutopilot, AP_NAMES } from './autopilot.js';
+import { engageAutopilot, planTransferNode, planCircNode, AP_NAMES } from './autopilot.js';
 import { createCarrier, createLander, applyDeploy } from './models.js';
 import { createSky, createPlanet, createAtmosphere, createMoon, createGroundPatch, createSiteMarker } from './sky.js';
 import { MapView } from './map.js';
@@ -53,9 +53,16 @@ world3.add(shine, shine.target);
 const planetPivot = new THREE.Group(); planetPivot.rotation.x = Math.PI / 2; world3.add(planetPivot);
 const planetMesh = createPlanet(BODIES.planet.radius, sunRender); planetPivot.add(planetMesh);
 const atmo = createAtmosphere(BODIES.planet.radius, BODIES.planet.atmosphere.height, sunRender); world3.add(atmo);
-const moonMesh = createMoon(BODIES.moon.radius); moonMesh.scale.setScalar((BODIES.moon.radius - 1.2) / BODIES.moon.radius); world3.add(moonMesh); // slightly inside the exact-radius ground patch
-const patch = createGroundPatch(BODIES.moon.radius); world3.add(patch);
-const markers = BODIES.moon.sites.map((s) => { const m = createSiteMarker(s); world3.add(m); return m; });
+// moons (Pell, Wren): globe slightly inside its exact-radius ground patch, ore beacons
+const moonVis = {};
+for (const id of BODIES.planet.children) {
+  const B = BODIES[id];
+  const mesh = createMoon(B.radius); mesh.scale.setScalar((B.radius - 1.2) / B.radius); world3.add(mesh);
+  const gp = createGroundPatch(B.radius); world3.add(gp);
+  if (id === 'wren') { mesh.material.color.setRGB(0.82, 0.92, 1.0); gp.material.color.setRGB(0.82, 0.92, 1.0); } // slightly bluer, darker rock
+  moonVis[id] = { mesh, patch: gp, markers: B.sites.map((s) => { const m = createSiteMarker(s); world3.add(m); return m; }) };
+}
+const moonMesh = moonVis.moon.mesh, patch = moonVis.moon.patch, markers = moonVis.moon.markers;
 
 // ------------------------------------------------------------------------------ post
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: 4 }));
@@ -141,7 +148,7 @@ function onAction(name, arg) {
   const v = world.active;
   if (name === 'help') { $('help').classList.toggle('hidden'); return; }
   if (name === 'map') { toggleMap(); return; }
-  if (name === 'map-focus') { mcam.focus = (mcam.focus + 1) % 3; hud.toast(['Focus: vessel', 'Focus: Halcyon', 'Focus: Pell'][mcam.focus]); return; }
+  if (name === 'map-focus') { mcam.focus = (mcam.focus + 1) % 4; hud.toast(['Focus: vessel', 'Focus: Halcyon', 'Focus: Pell', 'Focus: Wren'][mcam.focus]); return; }
   if (name === 'quicksave') return quicksave();
   if (name === 'quickload') return quickload();
   if (name === 'pause') { paused = !paused; return; }
@@ -153,7 +160,16 @@ function onAction(name, arg) {
     case 'warp': world.setWarp(world.warpIndex + arg); break;
     case 'throttle': if (v.status === 'flying' || v.status === 'landed') { world.cancelAutopilot(v); v.throttle = arg; } break;
     case 'undock': if (!world.undock()) hud.toast('Undock needs the carrier in free flight with the lander docked', 'warn'); else rememberCam(world.active); break;
-    case 'circ': case 'xfer': case 'land': case 'asc': case 'rdv': ap(name); break;
+    case 'circ': case 'xfer': case 'land': case 'asc': case 'rdv': case 'node': ap(name); break;
+    case 'node-add': { const msg = world.addNode(v, arg); hud.toast(msg || `Maneuver node added at ${arg === 'ap' ? 'apoapsis' : 'periapsis'} (or +2 min if circular)`, msg ? 'warn' : 'info'); break; }
+    case 'node-nudge': { const msg = world.nudgeNode(v, arg[0], arg[1]); if (msg) hud.toast(msg, 'warn'); break; }
+    case 'node-shift': { const msg = world.shiftNode(v, arg); if (msg) hud.toast(msg, 'warn'); break; }
+    case 'node-step': hud.toast(`Node step: ${world.cycleNodeStep()} m/s`); break;
+    case 'node-del': { const msg = world.deleteNode(v); hud.toast(msg || 'Maneuver node deleted', msg ? 'warn' : 'info'); break; }
+    case 'tgt-body': hud.toast(`Target body: ${BODIES[world.cycleTargetBody()].name}`); break;
+    case 'tgt-site': { const s = world.cycleTargetSite(); hud.toast(`Target site: ${s ? s.name : 'auto (nearest)'} on ${BODIES[world.targetBodyId()].name}`); break; }
+    case 'plan-xfer': { const msg = planTransferNode(world, v, world.targetBodyId()); if (msg) hud.toast(msg, 'warn'); break; }
+    case 'plan-circ-ap': case 'plan-circ-pe': { const msg = planCircNode(world, v, name === 'plan-circ-ap' ? 'ap' : 'pe'); if (msg) hud.toast(msg, 'warn'); break; }
     case 'cancel': if (v.ap) world.cancelAutopilot(v, 'Autopilot cancelled'); v.drilling = false; v.refining = false; break;
     case 'panels': case 'radiators': case 'gear': {
       const msg = world.toggleDeploy(v, name);
@@ -184,6 +200,8 @@ function onAction(name, arg) {
 }
 for (const b of document.querySelectorAll('#vdep button')) b.addEventListener('click', () => onAction(b.dataset.dep === 'auto' ? 'autoret' : b.dataset.dep));
 for (const b of document.querySelectorAll('#actbtns button')) b.addEventListener('click', () => onAction(b.dataset.act));
+const MN_ACT = { tbody: 'tgt-body', tsite: 'tgt-site', xfer: 'plan-xfer', circap: 'plan-circ-ap', circpe: 'plan-circ-pe', exec: 'node', del: 'node-del' };
+for (const b of document.querySelectorAll('#mn-btns button')) b.addEventListener('click', () => onAction(MN_ACT[b.dataset.mn]));
 for (const b of document.querySelectorAll('#sas button')) b.addEventListener('click', () => onAction(b.dataset.sas === 'toggle' ? 'sas-toggle' : 'sas-mode', b.dataset.sas));
 function toggleMap() { mapOn = !mapOn; map.setVisible(mapOn); document.body.classList.toggle('map', mapOn); }
 
@@ -246,12 +264,13 @@ function frame(now) {
 function render(dt) {
   const v = world.active;
   const B = BODIES[v.body];
-  const moonAbs = world.moonState(world.UT).r;
+  const moonAbs = {};
+  for (const id of BODIES.planet.children) moonAbs[id] = world.moonState(world.UT, undefined, id).r;
   let origin;
   const focusAbs = new THREE.Vector3();
   if (mapOn) {
     focusAbs.set(0, 0, 0);
-    if (mcam.focus === 0) world.absPos(v, focusAbs); else if (mcam.focus === 2) focusAbs.copy(moonAbs);
+    if (mcam.focus === 0) world.absPos(v, focusAbs); else if (mcam.focus >= 2) focusAbs.copy(moonAbs[BODIES.planet.children[mcam.focus - 2]]);
     origin = focusAbs;
   } else origin = world.absPos(v, new THREE.Vector3());
 
@@ -260,28 +279,30 @@ function render(dt) {
   atmo.position.copy(planetMesh.parent.position);
   planetMesh.rotation.y = (world.UT * Math.PI * 2 / BODIES.planet.rotationPeriod) % (Math.PI * 2);
   planetMesh.material.uniforms.uTime.value = world.UT % 100000;
-  moonMesh.position.copy(moonAbs).sub(origin);
-
-  // --- ground patch under the active vessel when low over the moon
-  const nearMoon = !mapOn && v.body === 'moon' && world.altitude(v) < 60000;
-  patch.visible = nearMoon;
-  if (nearMoon) {
-    _v1.copy(v.r).normalize();
-    patch.position.copy(moonMesh.position);
-    patch.quaternion.setFromUnitVectors(Zaxis, _v1);
-    patch.material.userData.uToMoon.value.setFromMatrix4(_m4.makeRotationFromQuaternion(patch.quaternion));
+  for (const id of BODIES.planet.children) {
+    const mv = moonVis[id], MB = BODIES[id];
+    mv.mesh.position.copy(moonAbs[id]).sub(origin);
+    // --- ground patch under the active vessel when low over the moon
+    const nearMoon = !mapOn && v.body === id && world.altitude(v) < 60000;
+    mv.patch.visible = nearMoon;
+    if (nearMoon) {
+      _v1.copy(v.r).normalize();
+      mv.patch.position.copy(mv.mesh.position);
+      mv.patch.quaternion.setFromUnitVectors(Zaxis, _v1);
+      mv.patch.material.userData.uToMoon.value.setFromMatrix4(_m4.makeRotationFromQuaternion(mv.patch.quaternion));
+    }
+    // --- ore beacons
+    MB.sites.forEach((s, i) => {
+      const m = mv.markers[i];
+      m.position.copy(mv.mesh.position).addScaledVector(s.dir, MB.radius);
+      m.quaternion.setFromUnitVectors(Zaxis, s.dir);
+      const dist = m.position.length();
+      m.visible = !mapOn && dist < 3e6;
+      m.userData.beamMat.uniforms.uTime.value = clock;
+      m.userData.sprite.visible = dist > 2500; // far-away glow only; up close the ring and beam mark the site
+      m.userData.sprite.scale.setScalar(Math.max(300, dist * 0.012));
+    });
   }
-  // --- ore beacons
-  BODIES.moon.sites.forEach((s, i) => {
-    const m = markers[i];
-    m.position.copy(moonMesh.position).addScaledVector(s.dir, BODIES.moon.radius);
-    m.quaternion.setFromUnitVectors(Zaxis, s.dir);
-    const dist = m.position.length();
-    m.visible = !mapOn && dist < 3e6;
-    m.userData.beamMat.uniforms.uTime.value = clock;
-    m.userData.sprite.visible = dist > 2500; // far-away glow only; up close the ring and beam mark the site
-    m.userData.sprite.scale.setScalar(Math.max(300, dist * 0.012));
-  });
 
   // --- vessels
   for (const ves of world.vessels) {
@@ -328,7 +349,7 @@ function render(dt) {
     const sc = sun.shadow.camera;
     sc.left = -S; sc.right = S; sc.top = S; sc.bottom = -S; sc.near = 10; sc.far = 1500; sc.updateProjectionMatrix();
   }
-  const bodyAbsPos = v.body === 'moon' ? moonAbs : _v2.set(0, 0, 0);
+  const bodyAbsPos = isMoon(v.body) ? moonAbs[v.body] : _v2.set(0, 0, 0);
   _v1.copy(bodyAbsPos).sub(origin);
   const dPlanet = world.absPos(v, _v2).length();
   shine.position.copy(_v2.set(0, 0, 0).sub(origin).normalize());
@@ -387,6 +408,6 @@ function resize() {
 addEventListener('resize', resize);
 resize();
 
-window.__game = { dbg, world, hud, onAction, fcam, mcam, input, THREE, renderer, camera, scene, patch, markers, moonMesh, toggleMap: () => toggleMap(), setPaused: (p) => { paused = p; } };
+window.__game = { dbg, world, hud, onAction, fcam, mcam, input, THREE, renderer, camera, scene, patch, markers, moonMesh, moonVis, toggleMap: () => toggleMap(), setPaused: (p) => { paused = p; } };
 requestAnimationFrame((t) => { last = t; $('loading').classList.add('gone'); hud.toast('Welcome aboard. F1 for controls, M for the map.', 'info'); requestAnimationFrame(frame); });
 window.__ready = true;

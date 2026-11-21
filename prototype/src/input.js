@@ -3,7 +3,8 @@
 import { Vector3 } from 'three';
 import { SAS_MODES } from './vessels.js';
 
-const PREVENT = new Set(['Tab', 'F1', 'F5', 'F9', 'Backspace', 'Space', 'BracketLeft', 'BracketRight', 'Comma', 'Period', 'ArrowUp', 'ArrowDown']);
+const PREVENT = new Set(['Tab', 'F1', 'F5', 'F9', 'Backspace', 'Space', 'BracketLeft', 'BracketRight', 'Comma', 'Period', 'ArrowUp', 'ArrowDown',
+  'Enter', 'Home', 'End', 'PageUp', 'PageDown', 'ArrowLeft', 'ArrowRight', 'Slash', 'Quote', 'Backslash', 'Backquote', 'Delete']);
 
 export class Input {
   constructor(canvas, cams, on) {
@@ -44,6 +45,23 @@ export class Input {
     const a = (n, arg) => this.on(n, arg);
     if (k === 'KeyT') a('sas-toggle');
     else if (k.startsWith('Digit') && +k.slice(5) >= 1 && +k.slice(5) <= 9) a('sas-mode', SAS_MODES[+k.slice(5) - 1]);
+    else if (k === 'Digit0') a('sas-mode', 'maneuver');
+    // maneuver nodes (every letter key is taken, so these live on punctuation / navigation keys)
+    else if (k === 'Semicolon') a('node-add', 'ap');
+    else if (k === 'Quote') a('node-add', 'pe');
+    else if (k === 'Enter') a('node');
+    else if (k === 'Equal' || k === 'NumpadAdd') a('node-nudge', ['pro', 1]);
+    else if (k === 'Minus' || k === 'NumpadSubtract') a('node-nudge', ['pro', -1]);
+    else if (k === 'Home') a('node-nudge', ['nrm', 1]);
+    else if (k === 'End') a('node-nudge', ['nrm', -1]);
+    else if (k === 'PageUp') a('node-nudge', ['rad', 1]);
+    else if (k === 'PageDown') a('node-nudge', ['rad', -1]);
+    else if (k === 'ArrowLeft') a('node-shift', -1);
+    else if (k === 'ArrowRight') a('node-shift', 1);
+    else if (k === 'Backslash') a('node-step');
+    else if (k === 'Delete') a('node-del');
+    else if (k === 'Backquote') a('tgt-body');
+    else if (k === 'Slash') a('tgt-site');
     else if (k === 'BracketLeft') a('vessel', -1);
     else if (k === 'BracketRight') a('vessel', 1);
     else if (k === 'Comma') a('warp', -1);

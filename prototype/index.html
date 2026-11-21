@@ -10,10 +10,10 @@
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
     "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
-    "./src/main.js": "./src/main.js?v=r3", "./src/world.js": "./src/world.js?v=r3", "./src/orbits.js": "./src/orbits.js?v=r3",
-    "./src/bodies.js": "./src/bodies.js?v=r3", "./src/vessels.js": "./src/vessels.js?v=r3", "./src/autopilot.js": "./src/autopilot.js?v=r3",
-    "./src/models.js": "./src/models.js?v=r3", "./src/sky.js": "./src/sky.js?v=r3", "./src/map.js": "./src/map.js?v=r3",
-    "./src/hud.js": "./src/hud.js?v=r3", "./src/input.js": "./src/input.js?v=r3"
+    "./src/main.js": "./src/main.js?v=r4", "./src/world.js": "./src/world.js?v=r4", "./src/orbits.js": "./src/orbits.js?v=r4",
+    "./src/bodies.js": "./src/bodies.js?v=r4", "./src/vessels.js": "./src/vessels.js?v=r4", "./src/autopilot.js": "./src/autopilot.js?v=r4",
+    "./src/models.js": "./src/models.js?v=r4", "./src/sky.js": "./src/sky.js?v=r4", "./src/map.js": "./src/map.js?v=r4",
+    "./src/hud.js": "./src/hud.js?v=r4", "./src/input.js": "./src/input.js?v=r4"
   }
 }
 </script>
@@ -41,6 +41,26 @@
     <div class="row sub" id="r-tgt"><span>Target</span><b id="f-tgt">-</b></div>
     <div class="row sub"><span>Influence</span><b id="f-soi">-</b></div>
     <div class="row sub"><span>Universal time</span><b id="f-ut">-</b></div>
+  </div>
+
+  <!-- maneuver planner, right under the flight data -->
+  <div id="maneuver" class="panel">
+    <div id="mn-head"><span>Maneuver</span><b id="mn-tgt">-</b></div>
+    <div id="mn-info">
+      <div class="row"><span id="mn-t">-</span><b id="mn-dv">-</b></div>
+      <div class="row sub"><span id="mn-comp">-</span><b id="mn-step">-</b></div>
+      <div class="row sub"><span id="mn-burn">-</span><b id="mn-state"></b></div>
+      <div class="row sub"><span id="mn-post"></span></div>
+    </div>
+    <div id="mn-btns">
+      <button data-mn="tbody" title="` : cycle target body (Pell / Wren)">Body</button>
+      <button data-mn="tsite" title="/ : cycle target ore site (auto = nearest)">Site</button>
+      <button data-mn="xfer" title="plan a transfer node to the target body (H plans and executes)">Plan xfer</button>
+      <button data-mn="circap" title="plan a circularization node at apoapsis">Circ Ap</button>
+      <button data-mn="circpe" title="plan a circularization node at periapsis">Circ Pe</button>
+      <button data-mn="exec" title="Enter: execute the node">Exec</button>
+      <button data-mn="del" title="Delete: remove the node">Del</button>
+    </div>
   </div>
 
   <!-- top-centre status -->
@@ -74,6 +94,7 @@
       <button data-sas="antiradial" title="7 Radial in">RIN</button>
       <button data-sas="target" title="8 Target">TGT</button>
       <button data-sas="antitarget" title="9 Anti-target">ATG</button>
+      <button data-sas="maneuver" title="0 Maneuver node burn vector">MAN</button>
     </div>
   </div>
 
@@ -126,14 +147,15 @@
   <div class="card">
     <h2>Controls</h2>
     <div class="cols">
-      <div><b>Attitude</b><br>W/S pitch &middot; A/D yaw &middot; Q/E roll<br>T SAS on/off &middot; 1-9 SAS mode<br>
+      <div><b>Attitude</b><br>W/S pitch &middot; A/D yaw &middot; Q/E roll<br>T SAS on/off &middot; 1-9, 0 SAS mode (0 = maneuver)<br>
       <b>Throttle</b><br>Shift/Ctrl up/down &middot; Z full &middot; X cut<br>
       <b>Camera</b><br>Mouse drag orbit &middot; wheel zoom<br>M map &middot; Tab map focus<br>
       <b>Vessel</b><br>[ ] switch vessel &middot; U undock</div>
       <div><b>Time</b><br>, slower &middot; . faster &middot; P pause<br>
-      <b>Assists</b><br>H transfer to Pell (carrier)<br>C circularize at next apsis<br>L landing assist (lander)<br>B ascent + launch window (lander)<br>V rendezvous &amp; dock (auto-dock &lt;50 m, &lt;2 m/s)<br>Backspace cancel assist<br>
+      <b>Assists</b><br>H plan transfer to the target moon and fly it<br>C circularize at next apsis<br>L landing assist (lander)<br>B ascent + launch window (lander)<br>V rendezvous &amp; dock (auto-dock &lt;50 m, &lt;2 m/s)<br>Backspace cancel assist<br>
       <b>Rover</b><br>F drive mode (landed, wheels down): W/S drive, A/D steer, Space brake<br><b>Surface / ISRU</b><br>G drill on a beacon ring &middot; R refine ore (landed or in orbit)<br>Docked: Y refuel lander &middot; I offload ore to the carrier<br>
       <b>Power, heat, deployables (press while the vehicle you want is active)</b><br>J solar panels &middot; K radiators &middot; N landing gear / wheels<br>O auto-retract on burn (breaks above 1.5 g if off)<br>Drill/refinery need power (EC) and cooling.<br>
+      <b>Maneuver nodes</b><br>; / ' add node at next apoapsis / periapsis &middot; Enter execute<br>= / - prograde/retro &middot; Home / End normal/anti-normal &middot; PgUp / PgDn radial out/in<br>Left / Right node earlier/later &middot; \ step size &middot; Del delete<br>` target body &middot; / target ore site<br>
       <b>Saves</b><br>F5 quicksave &middot; F9 quickload</div>
     </div>
     <p>Impacts over 5 m/s or tipping destroy the vessel. Press F1 to close.</p>
@@ -153,6 +175,6 @@
 </div>
 
 <div id="loading">Initialising the system&hellip;</div>
-<script type="module" src="src/main.js?v=r3"></script>
+<script type="module" src="src/main.js?v=r4"></script>
 </body>
 </html>

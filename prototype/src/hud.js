@@ -1,8 +1,8 @@
 // HUD: DOM panels (objectives, flight data, actions, resources) + a WebGL navball drawn
 // into the bottom-left corner of the main canvas.
 import * as THREE from 'three';
-import { BODIES } from './bodies.js';
-import { OBJECTIVES, WARP } from './world.js';
+import { BODIES, isMoon } from './bodies.js';
+import { OBJECTIVES, WARP, nodeDvTotal } from './world.js';
 import { nextApoapsisTime, nextPeriapsisTime } from './orbits.js';
 import { AP_NAMES } from './autopilot.js';
 
@@ -104,7 +104,7 @@ function markerTexture(kind) {
   const c = document.createElement('canvas'); c.width = c.height = 64;
   const g = c.getContext('2d');
   g.lineWidth = 4; g.lineCap = 'round'; g.lineJoin = 'round';
-  const col = { pro: '#7dff9c', retro: '#7dff9c', normal: '#c58bff', antinormal: '#c58bff', radial: '#6fe3ff', antiradial: '#6fe3ff', target: '#ff7ad9', antitarget: '#ff7ad9' }[kind];
+  const col = { pro: '#7dff9c', retro: '#7dff9c', normal: '#c58bff', antinormal: '#c58bff', radial: '#6fe3ff', antiradial: '#6fe3ff', target: '#ff7ad9', antitarget: '#ff7ad9', maneuver: '#ffb347' }[kind];
   g.strokeStyle = col; g.fillStyle = col;
   g.shadowColor = '#000'; g.shadowBlur = 4;
   if (kind === 'pro' || kind === 'retro') {
@@ -119,6 +119,10 @@ function markerTexture(kind) {
     g.beginPath(); g.arc(32, 32, 14, 0, 7); g.stroke();
     g.beginPath(); g.moveTo(32, 18); g.lineTo(32, 46); g.moveTo(18, 32); g.lineTo(46, 32);
     if (kind === 'radial') { g.stroke(); } else { g.moveTo(32, 18); g.lineTo(32, 46); g.stroke(); }
+  } else if (kind === 'maneuver') {
+    g.beginPath(); g.arc(32, 32, 14, 0, 7); g.stroke();
+    g.beginPath(); g.moveTo(32, 18); g.lineTo(32, 5); g.moveTo(20, 40); g.lineTo(9, 48); g.moveTo(44, 40); g.lineTo(55, 48); g.stroke();
+    g.beginPath(); g.arc(32, 32, 4, 0, 7); g.fill();
   } else {
     g.beginPath(); g.moveTo(32, 10); g.lineTo(54, 32); g.lineTo(32, 54); g.lineTo(10, 32); g.closePath(); g.stroke();
     if (kind === 'target') { g.beginPath(); g.arc(32, 32, 3.5, 0, 7); g.fill(); } else { g.beginPath(); g.moveTo(24, 24); g.lineTo(40, 40); g.moveTo(40, 24); g.lineTo(24, 40); g.stroke(); }
@@ -139,8 +143,8 @@ function enu(r, out) {
 
 /** nearest ore beacon to a landed vessel: distance (m), relative bearing (rad, + = right) and compass bearing (deg) */
 function nearestSite(v) {
-  const B = BODIES.moon;
-  if (v.body !== 'moon' || !v.landedDir) return null;
+  if (!isMoon(v.body) || !v.landedDir) return null;
+  const B = BODIES[v.body];
   let best = null;
   for (const s of B.sites) {
     const ang = Math.acos(Math.min(1, v.landedDir.dot(s.dir)));
@@ -167,7 +171,7 @@ class Navball {
     this.ball = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 48), new THREE.MeshBasicMaterial({ map: navTexture(), toneMapped: false }));
     this.mirror.add(this.ball);
     this.markers = {};
-    for (const k of ['pro', 'retro', 'normal', 'antinormal', 'radial', 'antiradial', 'target', 'antitarget']) {
+    for (const k of ['pro', 'retro', 'normal', 'antinormal', 'radial', 'antiradial', 'target', 'antitarget', 'maneuver']) {
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: markerTexture(k), toneMapped: false, transparent: true }));
       s.scale.set(0.2, 0.2, 1); this.ball.add(s); this.markers[k] = s;
     }
@@ -199,6 +203,8 @@ class Navball {
     const ok = t && t.body === v.body;
     const td = ok ? t.r.clone().sub(v.r).normalize() : null;
     this.place(td || U, this.markers.target, !!ok); this.place(td ? td.clone().negate() : U, this.markers.antitarget, !!ok);
+    const md = world.maneuverDirection(v, new THREE.Vector3());
+    this.place(md || U, this.markers.maneuver, !!md);
 
     const rect = this.el.getBoundingClientRect();
     const size = renderer.getSize(new THREE.Vector2());
@@ -248,7 +254,7 @@ export class Hud {
     const alt = world.altitude(v) - v.spec.groundOffset;
     $('f-alt').textContent = fmtDist(alt);
     const speed = v.v.length();
-    $('f-vlabel').textContent = landed || (v.body === 'moon' && alt < 8000) ? 'Surface speed' : 'Velocity';
+    $('f-vlabel').textContent = landed || (isMoon(v.body) && alt < 8000) ? 'Surface speed' : 'Velocity';
     $('f-vel').textContent = fmtSpeed(speed);
     const el = v.orbit;
     if (el && v.status === 'flying') {
@@ -261,7 +267,7 @@ export class Hud {
     } else { $('f-ap').textContent = '-'; $('f-pe').textContent = '-'; $('f-tlabel').textContent = 'Next apsis'; $('f-t').textContent = '-'; }
     const rh = v.r.clone().normalize();
     const vs = v.v.dot(rh);
-    $('r-vs').classList.toggle('hide', !(v.body === 'moon' && alt < 30000));
+    $('r-vs').classList.toggle('hide', !(isMoon(v.body) && alt < 30000));
     $('f-vs').textContent = `${vs >= 0 ? '+' : ''}${fmtSpeed(vs)}`;
     const tg = world.targetOf(v);
     $('r-tgt').classList.toggle('hide', !(tg && tg.body === v.body));
@@ -270,7 +276,7 @@ export class Hud {
     $('f-ut').textContent = fmtUT(world.UT);
 
     // navball labels
-    $('n-mode').textContent = landed || (v.body === 'moon' && alt < 8000) ? 'Surface' : 'Orbit';
+    $('n-mode').textContent = landed || (isMoon(v.body) && alt < 8000) ? 'Surface' : 'Orbit';
     $('n-speed').textContent = fmtSpeed(speed);
     enu(v.r, null);
     const nose = v.noseWorld(new THREE.Vector3());
@@ -293,14 +299,14 @@ export class Hud {
     const C = world.carrier, L = world.lander;
     const can = {
       undock: v === C && L.status === 'docked' && C.status === 'flying',
-      xfer: v.kind === 'carrier' && v.body === 'planet' && v.status === 'flying',
+      xfer: v.body === 'planet' && v.status === 'flying',
       circ: v.status === 'flying' && !!v.orbit,
-      land: v.kind === 'lander' && v.body === 'moon' && v.status === 'flying',
+      land: v.kind === 'lander' && isMoon(v.body) && v.status === 'flying',
       drill: v.kind === 'lander' && landed,
       refine: v.spec.refEC > 0 && v.status !== 'docked' && v.res.ore > 1,
       refuel: L.status === 'docked' && C.status === 'flying',
       offload: L.status === 'docked' && C.status === 'flying',
-      asc: v.kind === 'lander' && v.body === 'moon' && (landed || v.status === 'flying'),
+      asc: v.kind === 'lander' && isMoon(v.body) && (landed || v.status === 'flying'),
       rdv: !!tg && tg.body === v.body && v.status === 'flying',
       cancel: !!v.ap,
       drive: v.kind === 'lander' && (landed || v.driving),
@@ -308,7 +314,7 @@ export class Hud {
     for (const b of document.querySelectorAll('#actbtns button')) {
       const k = b.dataset.act;
       b.classList.toggle('off', !can[k]);
-      b.classList.toggle('live', (k === 'drill' && v.drilling) || (k === 'drive' && v.driving) || (k === 'refine' && v.refining) || (world.pumps.length && ((k === 'refuel' && world.pumpKind === 'refuel') || (k === 'offload' && world.pumpKind === 'offload'))) || (v.ap && v.ap.type === k));
+      b.classList.toggle('live', (k === 'drill' && v.drilling) || (k === 'drive' && v.driving) || (k === 'refine' && v.refining) || (world.pumps.length && ((k === 'refuel' && world.pumpKind === 'refuel') || (k === 'offload' && world.pumpKind === 'offload'))) || (v.ap && (v.ap.type === k || (k === 'xfer' && v.ap.type === 'node' && v.ap.msg))));
     }
 
     // status chip + prompts
@@ -318,6 +324,7 @@ export class Hud {
     const sp0 = v.spec;
     const nearest = landed ? nearestSite(v) : null;
     this.updateDrive(v, nearest);
+    this.updateManeuver(world, v);
     if (landed) {
       const site = world.siteNear(v);
       if (v.drilling) prompt = `Drilling at ${site ? site.name : '...'}: ore ${Math.round(v.res.ore)} / ${v.spec.oreCap} kg`;
@@ -379,6 +386,37 @@ export class Hud {
     else if (busy && !v.inSun) warn = 'In shadow: running on battery';
     else if (v.stress > 0) warn = 'Panels/radiators: retract! (1.5 g limit)';
     wc.style.display = warn ? 'block' : 'none'; wc.textContent = warn;
+  }
+  /** Maneuver panel: target body/site, first node (dv, time, burn estimate, post-node orbit) and planner button states */
+  updateManeuver(world, v) {
+    const TB = BODIES[world.targetBodyId()], site = world.targetSite(TB.id);
+    $('mn-tgt').textContent = `${TB.name} / ${site ? site.name : 'auto site'}`;
+    const flying = v.status === 'flying' && !!v.orbit;
+    const n = flying ? v.nodes[0] : null;
+    $('mn-info').style.display = n ? 'block' : 'none';
+    if (n) {
+      const dvm = nodeDvTotal(n), sg = (x) => `${x >= 0 ? '+' : '-'}${Math.abs(x) < 10 ? Math.abs(x).toFixed(1) : Math.abs(x).toFixed(0)}`;
+      $('mn-t').textContent = `T${n.t >= world.UT ? '-' : '+'}${fmtDur(Math.abs(n.t - world.UT))}`;
+      $('mn-dv').textContent = fmtSpeed(dvm);
+      $('mn-comp').textContent = `P ${sg(n.dv.pro)}  N ${sg(n.dv.nrm)}  R ${sg(n.dv.rad)}`;
+      $('mn-step').textContent = `step ${world.nodeStep()}`;
+      $('mn-burn').textContent = `Burn ${fmtDur(world.burnTime(v, dvm))}`;
+      $('mn-state').textContent = v.ap && v.ap.type === 'node' ? v.ap.phase : '';
+      const post = world.getPatches(v).filter((p) => p.post);
+      const enc = post.find((p) => p.bodyId !== v.body && isMoon(p.bodyId));
+      let txt = '';
+      if (enc) txt = `${BODIES[enc.bodyId].name}: Pe ${fmtDist(enc.el.rp - BODIES[enc.bodyId].radius)}`;
+      else if (post.length) {
+        const el = post[0].el, R = BODIES[post[0].bodyId].radius;
+        txt = `After: Pe ${fmtDist(el.rp - R)}  Ap ${el.hyper ? 'escape' : fmtDist(el.ra - R)}`;
+      }
+      $('mn-post').textContent = txt;
+    }
+    const can = { tbody: true, tsite: true, xfer: flying && v.body === 'planet', circap: flying && !v.orbit.hyper, circpe: flying, exec: !!n, del: !!n };
+    for (const b of document.querySelectorAll('#mn-btns button')) {
+      b.classList.toggle('off', !can[b.dataset.mn]);
+      b.classList.toggle('live', b.dataset.mn === 'exec' && !!(v.ap && v.ap.type === 'node'));
+    }
   }
   updateDrive(v, nearest) {
     const box = $('drivebox');

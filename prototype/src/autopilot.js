@@ -2,13 +2,13 @@
 // An autopilot is just state in `vessel.ap`; each sim sub-step it may set `vessel.throttle`,
 // `vessel.ap.dir` (nose direction for SAS) and request time warp. Pure sim, no DOM.
 import { Vector3, Quaternion } from 'three';
-import { BODIES } from './bodies.js';
-import { elementsFromState, stateAt, nextApoapsisTime, nextPeriapsisTime, TAU, G0 } from './orbits.js';
+import { BODIES, isMoon } from './bodies.js';
+import { elementsFromState, stateAt, nextApoapsisTime, nextPeriapsisTime, nodeDvVector, TAU, G0 } from './orbits.js';
 import { WARP, THRUST_WARP_MAX } from './world.js';
 
 const _a = new Vector3(), _b = new Vector3(), _c = new Vector3(), _d = new Vector3();
 
-export const AP_NAMES = { circ: 'Circularize', xfer: 'Transfer to Pell', land: 'Landing assist', rdv: 'Rendezvous', asc: 'Ascent assist' };
+export const AP_NAMES = { circ: 'Circularize', xfer: 'Transfer', node: 'Execute node', land: 'Landing assist', rdv: 'Rendezvous', asc: 'Ascent assist' };
 
 function aligned(v, dir, cosTol = 0.985) { return v.noseWorld(_a).dot(dir) > cosTol; }
 
@@ -29,7 +29,7 @@ function noWarp(world, v) { if (v.id === world.activeId && world.warpIndex > 2) 
 
 export function engageAutopilot(world, v, type) {
   if (type === 'asc') {
-    if (v.body !== 'moon' || !v.spec.canLand) return 'Ascent assist is for the lander around Pell';
+    if (!isMoon(v.body) || !v.spec.canLand) return 'Ascent assist is for the lander around a moon';
     if (v.status === 'landed' && v.res.fuel < 1) return 'No propellant: refine ore first (R)';
     v.ap = { type, phase: 'plan', tgt: 45000 };
     v.sas.on = true;
@@ -42,11 +42,15 @@ export function engageAutopilot(world, v, type) {
     v.ap = { type, phase: 'plan' };
   } else if (type === 'xfer') {
     if (v.body !== 'planet') return 'Transfer assist works from Halcyon orbit';
-    if (v.kind !== 'carrier') return 'Transfer assist is for the carrier';
-    const msg = planTransfer(world, v);
+    const bid = world.targetBodyId();
+    const msg = planTransferNode(world, v, bid);
     if (msg) return msg;
+    v.ap = { type: 'node', phase: 'plan', body: v.body, msg: `Transfer burn complete: coast to ${BODIES[bid].name} (warp is safe)` };
+  } else if (type === 'node') {
+    if (!v.nodes.length) return "No maneuver node: add one (; or ') or plan a transfer";
+    v.ap = { type, phase: 'plan', body: v.body };
   } else if (type === 'land') {
-    if (v.body !== 'moon') return 'Landing assist works around Pell';
+    if (!isMoon(v.body)) return 'Landing assist works around a moon (Pell, Wren)';
     if (!v.spec.canLand) return 'This vessel cannot land';
     v.ap = { type, phase: 'plan' };
   } else if (type === 'rdv') {
@@ -63,7 +67,7 @@ export function engageAutopilot(world, v, type) {
 export function updateAutopilot(world, v, h) {
   const ap = v.ap;
   if (!ap || (v.status !== 'flying' && !(v.status === 'landed' && ap.type === 'asc'))) { if (ap && v.status !== 'flying') v.ap = null; return; }
-  const fn = { circ: runCirc, xfer: runXfer, land: runLand, rdv: runRdv, asc: runAsc }[ap.type];
+  const fn = { circ: runCirc, node: runNode, land: runLand, rdv: runRdv, asc: runAsc }[ap.type];
   fn(world, v, ap, h);
 }
 
@@ -127,108 +131,130 @@ function runCirc(world, v, ap) {
   }
 }
 
-// ---------------------------------------------------------------------------------- transfer
-function apoFast(mu, r, v) {
-  const rm = r.length();
-  const a = 1 / (2 / rm - v.lengthSq() / mu);
-  if (a < 0) return Infinity;
-  const h2 = _d.crossVectors(r, v).lengthSq();
-  return a * (1 + Math.sqrt(Math.max(0, 1 - h2 / (mu * a))));
-}
+// ---------------------------------------------------------------------------------- maneuver nodes
+const _p = { r: new Vector3(), v: new Vector3() };
 
-/** headless prograde burn to apoapsis raT; replicates the in-game burn (RK4, thrust along velocity).
- *  The last step is shortened so the cut-off is exact regardless of the step size. */
-export function simBurn(mu, r0, v0, mass0, F, mdot, raT, h) {
-  const r = r0.clone(), v = v0.clone();
-  let m = mass0, t = 0;
-  const kr = [0, 1, 2, 3].map(() => new Vector3()), kv = [0, 1, 2, 3].map(() => new Vector3());
-  const tr = new Vector3(), tv = new Vector3(), pr = new Vector3(), pv = new Vector3();
-  const acc = (rr, vv, out) => out.copy(rr).multiplyScalar(-mu / Math.pow(rr.lengthSq(), 1.5)).addScaledVector(vv, F / m / vv.length());
-  const step = (hh) => {
-    kr[0].copy(v); acc(r, v, kv[0]);
-    tr.copy(r).addScaledVector(kr[0], hh / 2); tv.copy(v).addScaledVector(kv[0], hh / 2); kr[1].copy(tv); acc(tr, tv, kv[1]);
-    tr.copy(r).addScaledVector(kr[1], hh / 2); tv.copy(v).addScaledVector(kv[1], hh / 2); kr[2].copy(tv); acc(tr, tv, kv[2]);
-    tr.copy(r).addScaledVector(kr[2], hh); tv.copy(v).addScaledVector(kv[2], hh); kr[3].copy(tv); acc(tr, tv, kv[3]);
-    r.addScaledVector(kr[0], hh / 6).addScaledVector(kr[1], hh / 3).addScaledVector(kr[2], hh / 3).addScaledVector(kr[3], hh / 6);
-    v.addScaledVector(kv[0], hh / 6).addScaledVector(kv[1], hh / 3).addScaledVector(kv[2], hh / 3).addScaledVector(kv[3], hh / 6);
+/** prograde dv (m/s) that raises the apoapsis to raT from state (r, v); null if it already reaches it */
+function dvToApo(mu, r, v, raT) {
+  const rm = r.length(), vm = v.length();
+  const h0 = _d.crossVectors(r, v).length();
+  const apo = (dv) => {
+    const sp = vm + dv, en = sp * sp / 2 - mu / rm;
+    if (en >= 0) return Infinity;
+    const a = -mu / (2 * en), h = h0 * sp / vm;
+    return a * (1 + Math.sqrt(Math.max(0, 1 - h * h / (mu * a))));
   };
-  while (t < 900) {
-    if (apoFast(mu, r, v) >= raT) break;
-    pr.copy(r); pv.copy(v);
-    const m0 = m;
-    step(h); m -= mdot * h;
-    if (apoFast(mu, r, v) >= raT) {
-      let lo = 0, hi = h;
-      for (let i = 0; i < 12; i++) {
-        const mid = (lo + hi) / 2;
-        r.copy(pr); v.copy(pv); m = m0; step(mid); m -= mdot * mid;
-        if (apoFast(mu, r, v) >= raT) hi = mid; else lo = mid;
-      }
-      t += hi;
-      break;
-    }
-    t += h;
-  }
-  return { r, v, t };
+  if (apo(0) >= raT) return null;
+  let lo = 0, hi = Math.sqrt(2 * mu / rm) - vm + 1;
+  for (let i = 0; i < 50; i++) { const mid = (lo + hi) / 2; if (apo(mid) >= raT) hi = mid; else lo = mid; }
+  return hi;
 }
 
-const PE_TARGET = 55e3;
-function planTransfer(world, v) {
-  const P = BODIES.planet, M = BODIES.moon, mu = P.mu;
+/**
+ * Plan a transfer to a moon as a prograde node. For every departure time over one orbit the node dv is the Hohmann-style
+ * burn that puts the apoapsis at the moon's orbit; the departure time is then refined (impulsive model, same findEvent
+ * the map uses) until the encounter periapsis matches the body's target. The node executor guides against the planned
+ * post-node orbit, so the finite burn reproduces this impulsive solution.
+ */
+export function planTransferNode(world, v, bodyId) {
+  const P = BODIES.planet, M = BODIES[bodyId], mu = P.mu;
   const el0 = v.orbit;
-  if (!el0 || el0.hyper) return 'Need a bound orbit around Halcyon';
-  const mass = world.massOf(v), F = v.spec.thrust, mdot = v.massFlow(1);
-  const raT = M.orbit.a;
-  const T = el0.period;
-  const t0 = world.UT;
-  const evaluate = (delta, h) => {
-    const t = t0 + delta;
-    const s = stateAt(el0, t);
-    const b = simBurn(mu, s.r, s.v, mass, F, mdot, raT, h);
-    const el = elementsFromState(mu, b.r, b.v, t + b.t);
-    const ev = world.findEvent('planet', el, t + b.t, 0);
-    if (ev.type !== 'enter' || ev.t - (t + b.t) > el.period * 0.75) return null; // first pass only
-    const st = stateAt(el, ev.t), ms = world.moonState(ev.t);
-    const e2 = elementsFromState(M.mu, st.r.clone().sub(ms.r), st.v.clone().sub(ms.v), ev.t);
-    return { delta, pe: e2.rp - M.radius, tEnter: ev.t, burnT: b.t };
+  if (v.body !== 'planet') return 'Transfers are planned from Halcyon orbit';
+  if (v.status !== 'flying' || !el0 || el0.hyper) return 'Need a bound orbit around Halcyon';
+  const raT = M.orbit.a, T = el0.period, t0 = world.UT;
+  const lead = world.burnTime(v, 1000) / 2 + 45; // earliest node: time to turn the ship and start the burn
+  const evaluate = (delta) => {
+    const t = t0 + lead + delta;
+    stateAt(el0, t, _p);
+    const dv = dvToApo(mu, _p.r, _p.v, raT);
+    if (dv === null) return null;
+    const el = elementsFromState(mu, _p.r, _p.v.clone().multiplyScalar(1 + dv / _p.v.length()), t);
+    const ev = world.findEvent('planet', el, t, 0);
+    if (ev.type !== 'enter' || ev.body !== bodyId || ev.t - t > el.period * 0.75) return null; // first pass, this moon only
+    const st = stateAt(el, ev.t), ms = world.moonState(ev.t, undefined, bodyId);
+    const e2 = elementsFromState(M.mu, st.r.sub(ms.r), st.v.sub(ms.v), ev.t);
+    return { delta, dv, pe: e2.rp - M.radius };
   };
   let best = null;
-  const consider = (r) => { if (r && (!best || Math.abs(r.pe - PE_TARGET) < Math.abs(best.pe - PE_TARGET))) best = r; };
-  const cs = T / 500; // coarse scan step (the window is about a minute wide)
-  for (let d = 0; d < T; d += cs) consider(evaluate(d, 0.5));
-  if (!best) return 'No transfer window found: try a different orbit';
-  const c = best.delta;
-  best = null;
-  for (let d = c - cs; d <= c + cs; d += 0.25) if (d >= 0) consider(evaluate(d, 0.05));
-  if (!best) return 'No precise transfer solution found';
-  if (best.pe < 15e3 && !world.headless) world.say('Warning: low predicted periapsis at Pell', 'warn');
-  v.ap = { type: 'xfer', phase: 'wait', tStart: t0 + best.delta, raT, pe: best.pe };
-  if (!world.headless) world.say(`Transfer planned: burn in ${best.delta.toFixed(0)} s, Pell periapsis ~${(best.pe / 1000).toFixed(0)} km`, 'info');
+  const consider = (r) => { if (r && (!best || Math.abs(r.pe - M.targetPe) < Math.abs(best.pe - M.targetPe))) best = r; };
+  // the encounter window is about +-soi/(ra * orbital rate) wide in departure time: scan with a fraction of that
+  const cs = Math.max(1, Math.min(T / 20, 0.8 * M.soi / (raT * 2 * Math.PI / T)));
+  for (let d = 0; d < T; d += cs) consider(evaluate(d));
+  if (!best) return `No transfer window to ${M.name} found: try a different orbit`;
+  let step = cs;
+  for (let level = 0; level < 4; level++) {
+    const c = best.delta, sub = step / 10;
+    for (let d = c - step; d <= c + step + 1e-9; d += sub) if (d >= 0) consider(evaluate(d));
+    step = sub;
+  }
+  const msg = world._nodeEditable(v);
+  if (msg) return msg;
+  world.setNode(v, { t: t0 + lead + best.delta, dv: { pro: best.dv, nrm: 0, rad: 0 } });
+  if (!world.headless) {
+    if (Math.abs(best.pe - M.targetPe) > 0.3 * M.targetPe + 3000) world.say(`Warning: predicted ${M.name} periapsis ${(best.pe / 1000).toFixed(0)} km misses the ${(M.targetPe / 1000).toFixed(0)} km target`, 'warn');
+    world.say(`Transfer to ${M.name} planned: node in ${(lead + best.delta).toFixed(0)} s, ${best.dv.toFixed(0)} m/s, periapsis ~${(best.pe / 1000).toFixed(0)} km`, 'info');
+  }
   return null;
 }
 
-function runXfer(world, v, ap) {
-  const mu = BODIES.planet.mu;
-  if (v.body !== 'planet') return finish(world, v, 'Transfer complete');
-  ap.dir = (ap.dir || new Vector3()).copy(v.v).normalize();
+/** circularization node at the next apoapsis ('ap') or periapsis ('pe') */
+export function planCircNode(world, v, where) {
+  const el = v.orbit;
+  if (v.status !== 'flying' || !el) return 'No orbit solution';
+  if (where === 'ap' && el.hyper) return 'A hyperbolic orbit has no apoapsis';
+  const mu = BODIES[v.body].mu, t = world.UT;
+  const lead = world.burnTime(v, 300) / 2 + 40;
+  let tA = where === 'ap' ? nextApoapsisTime(el, t) : nextPeriapsisTime(el, t);
+  if (el.hyper) { if (tA < t + lead) return 'Periapsis already passed'; } else while (tA < t + lead) tA += el.period;
+  const rB = where === 'ap' ? el.ra : el.rp;
+  const dv = Math.sqrt(mu / rB) - Math.sqrt(mu * (2 / rB - 1 / el.a));
+  const msg = world._nodeEditable(v);
+  if (msg) return msg;
+  world.setNode(v, { t: tA, dv: { pro: dv, nrm: 0, rad: 0 } });
+  if (!world.headless) world.say(`Circularize node at ${where === 'ap' ? 'apoapsis' : 'periapsis'}: ${dv >= 0 ? '+' : ''}${dv.toFixed(0)} m/s`, 'info');
+  return null;
+}
+
+/**
+ * Execute the first node: warp to (node - half the burn), point along the node's inertial burn vector, then burn guided by
+ * the remaining dv = (planned post-node velocity) - (actual velocity), which is the node vector minus the dv delivered with
+ * gravity cancelled. Throttle tapers near the end; the node is removed once the remainder is ~0.
+ */
+function runNode(world, v, ap, h) {
+  const node = v.nodes[0];
+  if (!node || v.body !== ap.body) return finish(world, v, null);
+  if (ap.phase === 'plan') {
+    const dvv = nodeDvVector(v.orbit, node, _a, _p);
+    ap.dvm = dvv.length();
+    if (ap.dvm < 0.05) { v.nodes.shift(); world._nodeRev++; return finish(world, v, 'Node is empty: removed'); }
+    ap.d0 = dvv.clone().divideScalar(ap.dvm);
+    ap.ref = elementsFromState(BODIES[v.body].mu, _p.r.clone(), _p.v.clone().add(dvv), node.t);
+    ap.tStart = node.t - world.burnCentroid(v, ap.dvm); // centre the dv (not the duration) on the node
+    ap.dir = ap.d0.clone();
+    ap.phase = 'wait';
+    if (!world.headless) world.say(`Executing node: ${ap.dvm.toFixed(0)} m/s, burn ${world.burnTime(v, ap.dvm).toFixed(0)} s`, 'info');
+  }
   if (ap.phase === 'wait') {
+    ap.dir.copy(ap.d0);
     const left = ap.tStart - world.UT;
     ap.wakeAt = ap.tStart;
     if (left > 0) { pickWarp(world, v, left, 0, 1.5); return; }
     ap.phase = 'burn'; delete ap.wakeAt;
     if (v.id === world.activeId) world.warpIndex = Math.min(world.warpIndex, 2);
   }
-  if (ap.phase === 'burn') {
-    const ra = apoFast(mu, v.r, v.v);
-    if (ra >= ap.raT) return finish(world, v, 'Transfer burn complete: coast to Pell (warp is safe)');
-    v.throttle = aligned(v, ap.dir, 0.98) ? 1 : 0;
-    // estimate time to cut-off from how fast the apoapsis is climbing; fall back to 1x near it
-    if (ap.lastT === undefined || world.UT - ap.lastT > 0.5) {
-      if (ap.lastT !== undefined) ap.rate = (ra - ap.lastRa) / (world.UT - ap.lastT);
-      ap.lastRa = ra; ap.lastT = world.UT;
-    }
-    burnWarp(world, v, ap.rate > 0 ? ((ap.raT - ra) / ap.rate) * 0.5 : 0);
+  if (!v.hasProp()) { v.nodes = []; world._nodeRev++; return finish(world, v, null); }
+  const rem = _b.copy(stateAt(ap.ref, world.UT, _p).v).sub(v.v);
+  const remM = rem.length();
+  if (remM > 1e-6) ap.dir.copy(rem).divideScalar(remM);
+  if (remM < 0.004 || (ap.started && rem.dot(ap.d0) < 0)) {
+    v.nodes.shift(); world._nodeRev++;
+    return finish(world, v, ap.msg || `Maneuver complete (${remM.toFixed(2)} m/s off)`);
   }
+  const acc = accelOf(world, v);
+  const thr = Math.min(1, remM / (acc * h), Math.max(0.05, remM / (acc * 0.5))); // taper, last step is dead-beat
+  v.throttle = aligned(v, ap.dir, 0.98) ? thr : 0;
+  if (v.throttle > 0) ap.started = true;
+  burnWarp(world, v, (remM / acc) * 0.7);
 }
 
 // ---------------------------------------------------------------------------------- landing
@@ -281,7 +307,7 @@ function ensureGear(world, v) {
 
 function runLand(world, v, ap) {
   ensureGear(world, v);
-  const B = BODIES.moon;
+  const B = BODIES[v.body];
   const mu = B.mu;
   const R = B.radius;
   const off = v.spec.groundOffset;
@@ -298,9 +324,10 @@ function runLand(world, v, ap) {
       const sol = landingArc(world, v);
       if (!sol) { v.ap = null; if (!world.headless) world.say('Landing assist: could not find a descent (low propellant?)', 'bad'); return; }
       const W = new Vector3().crossVectors(v.r, v.v).normalize();
-      // pick the ore site that needs the least waiting
+      // the selected site of this moon, else the ore site that needs the least waiting
+      const sel = world.targetSite(v.body);
       let bestWait = Infinity, best = null;
-      for (const s of B.sites) {
+      for (const s of (sel ? [sel] : B.sites)) {
         const ahead = angleAhead(v.r, s.dir.clone().multiplyScalar(R), W);
         const wait = ((ahead - sol.arc) % TAU + TAU) % TAU;
         if (wait < bestWait) { bestWait = wait; best = s; }
@@ -418,9 +445,9 @@ function runRdv(world, v, ap) {
 
 // ---------------------------------------------------------------------------------- ascent
 function planAscent(world, v, ap) {
-  const B = BODIES.moon;
+  const B = BODIES[v.body];
   const C = world.carrier;
-  const haveC = C && C !== v && C.status === 'flying' && C.body === 'moon' && C.orbit && !C.orbit.hyper && C.orbit.e < 0.05;
+  const haveC = C && C !== v && C.status === 'flying' && C.body === v.body && C.orbit && !C.orbit.hyper && C.orbit.e < 0.05;
   ap.tgt = haveC ? Math.max(10000, C.orbit.a - B.radius) : 45000;
   ap.phase = 'run';
   if (!haveC || v.status !== 'landed') return;
@@ -445,7 +472,7 @@ function planAscent(world, v, ap) {
 export const ASC = { start: 100, frac: 0.12, maxPitch: 1.5 };
 
 function runAsc(world, v, ap) {
-  const B = BODIES.moon;
+  const B = BODIES[v.body];
   if (ap.phase === 'plan') planAscent(world, v, ap);
   if (ap.phase === 'wait') {
     const left = ap.tLaunch - world.UT;
@@ -460,14 +487,16 @@ function runAsc(world, v, ap) {
   // head along the carrier's orbit direction so the ascent lands in its plane
   const C = world.carrier;
   const W = _b.set(0, 0, 1);
-  if (C && C !== v && C.status === 'flying' && C.body === 'moon') W.crossVectors(C.r, C.v).normalize();
+  if (C && C !== v && C.status === 'flying' && C.body === v.body) W.crossVectors(C.r, C.v).normalize();
   const tan = _c.crossVectors(W, rh);
   if (tan.lengthSq() < 1e-6) tan.set(0, 1, 0).cross(rh);
   tan.normalize();
   const th = alt < ASC.start ? 0 : Math.min(ASC.maxPitch, ((alt - ASC.start) / (ap.tgt * ASC.frac)) * ASC.maxPitch);
   ap.dir = (ap.dir || new Vector3()).copy(rh).multiplyScalar(Math.cos(th)).addScaledVector(tan, Math.sin(th)).normalize();
-  if (v.status === 'landed') { v.throttle = 1; return; }
-  v.throttle = aligned(v, ap.dir, 0.9) ? 1 : 0.4;
+  // cap the acceleration at 8 surface g: a no-op at Pell, but keeps the climb sane on tiny low-gravity Wren
+  const cap = Math.min(1, 8 * B.mu / (B.radius * B.radius) / accelOf(world, v));
+  if (v.status === 'landed') { v.throttle = cap; return; }
+  v.throttle = aligned(v, ap.dir, 0.9) ? cap : 0.4 * cap;
   noWarp(world, v);
   if (v.orbit && !v.orbit.hyper && v.orbit.ra - B.radius >= ap.tgt && alt > 1500) {
     v.throttle = 0;

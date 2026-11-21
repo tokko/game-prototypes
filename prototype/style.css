@@ -28,6 +28,19 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #02040a; col
 #flight .row.sub.hide { display: none; }
 #flight .row:nth-child(4) { margin-bottom: 4px; padding-bottom: 6px; border-bottom: 1px solid rgba(130,180,230,.15); }
 
+#maneuver { position: absolute; right: 20px; top: 252px; width: 238px; padding: 7px 10px 8px; font-size: 12px; }
+#mn-head { display: flex; justify-content: space-between; gap: 6px; color: var(--dim); margin-bottom: 4px; white-space: nowrap; }
+#mn-head b { color: var(--fg); font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+#mn-info { display: none; margin-bottom: 5px; padding-bottom: 4px; border-bottom: 1px solid rgba(130,180,230,.15); }
+#maneuver .row { display: flex; justify-content: space-between; gap: 6px; line-height: 1.3; font-variant-numeric: tabular-nums; }
+#maneuver .row span { color: var(--dim); } #maneuver .row b { font-weight: 500; }
+#maneuver .row.sub { font-size: 11px; }
+#mn-btns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; pointer-events: auto; }
+#mn-btns button { padding: 3px 0; border-radius: 6px; border: 1px solid rgba(130,180,230,.25); background: rgba(8,16,30,.7); color: var(--fg); font-size: 10px; white-space: nowrap; cursor: pointer; }
+#mn-btns button:hover { border-color: var(--acc); }
+#mn-btns button.off { opacity: .32; }
+#mn-btns button.live { border-color: var(--ok); box-shadow: 0 0 8px rgba(91,226,138,.35); }
+
 #toasts { position: absolute; left: calc(50% + 30px); top: 18px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; width: 220px; max-width: 520px; }
 @media (min-width: 1100px) { #toasts { width: 520px; } }
 .toast { padding: 6px 14px; border-radius: 16px; background: rgba(8,16,30,.78); border: 1px solid rgba(130,180,230,.25); font-size: 13px; animation: tin .25s ease-out; transition: opacity .6s; }

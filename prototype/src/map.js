@@ -1,14 +1,16 @@
 // Map view overlay: conic trajectory lines per patch, Ap/Pe markers, SOI circle,
 // predicted encounter and DOM labels. Positions are physics-frame, relative to `origin`.
 import * as THREE from 'three';
-import { BODIES } from './bodies.js';
+import { BODIES, isMoon } from './bodies.js';
 import { sampleConic, stateAt } from './orbits.js';
-import { fmtDist } from './hud.js';
+import { nodeDvTotal } from './world.js';
+import { fmtDist, fmtSpeed } from './hud.js';
 
 const SEG = 200;
 const _mr = new THREE.Vector3(), _cp = new THREE.Vector3(), _sp2 = new THREE.Vector3(), _ds = new THREE.Vector3();
 const COLORS = [new THREE.Color(0.3, 1.1, 1.8), new THREE.Color(1.8, 1.0, 0.3), new THREE.Color(0.5, 1.8, 0.6), new THREE.Color(1.5, 0.5, 1.5)];
 const OTHER = new THREE.Color(1.1, 1.0, 0.45);
+const POST = [new THREE.Color(1.9, 0.55, 1.7), new THREE.Color(1.5, 0.9, 1.9), new THREE.Color(1.2, 1.2, 1.9)]; // trajectory after the maneuver node
 
 function iconTexture(kind) {
   const c = document.createElement('canvas'); c.width = c.height = 64;
@@ -17,6 +19,7 @@ function iconTexture(kind) {
   if (kind === 'ring') { g.beginPath(); g.arc(32, 32, 24, 0, 7); g.stroke(); }
   else if (kind === 'ves') { g.beginPath(); g.moveTo(32, 8); g.lineTo(54, 52); g.lineTo(32, 42); g.lineTo(10, 52); g.closePath(); g.fill(); }
   else if (kind === 'ap' || kind === 'pe') { g.beginPath(); g.moveTo(32, 12); g.lineTo(52, 32); g.lineTo(32, 52); g.lineTo(12, 32); g.closePath(); g.stroke(); if (kind === 'ap') { g.beginPath(); g.arc(32, 32, 4, 0, 7); g.fill(); } }
+  else if (kind === 'node') { g.beginPath(); g.arc(32, 32, 16, 0, 7); g.stroke(); g.beginPath(); g.moveTo(32, 6); g.lineTo(32, 20); g.moveTo(32, 44); g.lineTo(32, 58); g.moveTo(6, 32); g.lineTo(20, 32); g.moveTo(44, 32); g.lineTo(58, 32); g.stroke(); }
   else if (kind === 'enc') { g.beginPath(); g.arc(32, 32, 20, 0, 7); g.stroke(); g.beginPath(); g.arc(32, 32, 6, 0, 7); g.fill(); }
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
@@ -30,11 +33,17 @@ export class MapView {
     this.labels = [];
     this.lines = [];
     this.sprites = [];
-    this.tex = { ring: iconTexture('ring'), ves: iconTexture('ves'), ap: iconTexture('ap'), pe: iconTexture('pe'), enc: iconTexture('enc') };
-    this.moonLine = this.makeLine(new THREE.Color(0.35, 0.5, 0.8), 0.5, 360);
-    this.soiLine = this.makeLine(new THREE.Color(0.5, 0.65, 1.0), 0.35, 120);
+    this.tex = { ring: iconTexture('ring'), ves: iconTexture('ves'), ap: iconTexture('ap'), pe: iconTexture('pe'), enc: iconTexture('enc'), node: iconTexture('node') };
     this.ghostSoi = this.makeLine(new THREE.Color(1.8, 1.0, 0.3), 0.6, 120);
-    this.moonPts = sampleConic(BODIES.moon.orbit, 0, BODIES.moon.orbit.period, 360);
+    this.moonLines = {}; this.soiLines = {}; this.moonPts = {}; this.soiPts = {};
+    for (const id of BODIES.planet.children) { // orbit line + SOI circle per moon
+      const M = BODIES[id];
+      this.moonLines[id] = this.makeLine(new THREE.Color(0.35, 0.5, 0.8), 0.5, 360);
+      this.soiLines[id] = this.makeLine(new THREE.Color(0.5, 0.65, 1.0), 0.35, 120);
+      this.moonPts[id] = sampleConic(M.orbit, 0, M.orbit.period, 360);
+      this.soiPts[id] = [];
+      for (let i = 0; i <= 120; i++) { const a = (i / 120) * Math.PI * 2; this.soiPts[id].push(new THREE.Vector3(Math.cos(a) * M.soi, Math.sin(a) * M.soi, 0)); }
+    }
   }
   makeLine(color, opacity = 1, n = SEG + 1) {
     const geo = new THREE.BufferGeometry();
@@ -71,7 +80,8 @@ export class MapView {
   /** returns nothing; draws everything for this frame */
   update(world, origin, camera, size) {
     const used = { l: 0, line: 0, spr: 0 };
-    const moonAbs = world.moonState(world.UT).r;
+    const moonAbs = {};
+    for (const id of BODIES.planet.children) moonAbs[id] = world.moonState(world.UT, undefined, id).r;
     const proj = new THREE.Vector3();
     const place = (el, p) => { // p physics -> render -> screen
       proj.set(p.x - origin.x, p.z - origin.z, -(p.y - origin.y)).project(camera);
@@ -95,29 +105,27 @@ export class MapView {
     };
 
     // bodies
-    this._fillLine(this.moonLine, this.moonPts, new THREE.Vector3(), origin);
     nextSprite('ring', 0.045, 0x9fd0ff).position.copy(new THREE.Vector3().sub(origin));
     lab(BODIES.planet.name, 'body', new THREE.Vector3(0, 0, 0));
-    nextSprite('ring', 0.032, 0xcfd6e0).position.copy(moonAbs).sub(origin);
-    lab(BODIES.moon.name, 'body', moonAbs);
-    // ore beacons (when the moon is big enough on screen): easy to find from the map
-    {
-      const mrel = _mr.set(moonAbs.x - origin.x, moonAbs.z - origin.z, -(moonAbs.y - origin.y));
-      const pxMoon = BODIES.moon.radius * (size.y / 2) / (Math.max(1, mrel.distanceTo(camera.position)) * Math.tan((camera.fov * Math.PI / 180) / 2));
+    for (const id of BODIES.planet.children) {
+      const M = BODIES[id], mabs = moonAbs[id];
+      this._fillLine(this.moonLines[id], this.moonPts[id], new THREE.Vector3(), origin);
+      nextSprite('ring', 0.032, id === 'moon' ? 0xcfd6e0 : 0xc4d8e8).position.copy(mabs).sub(origin);
+      lab(M.name, 'body', mabs);
+      // ore beacons (when the moon is big enough on screen): easy to find from the map
+      const mrel = _mr.set(mabs.x - origin.x, mabs.z - origin.z, -(mabs.y - origin.y));
+      const pxMoon = M.radius * (size.y / 2) / (Math.max(1, mrel.distanceTo(camera.position)) * Math.tan((camera.fov * Math.PI / 180) / 2));
       if (pxMoon > 35) {
         const camPhys = _cp.set(camera.position.x, -camera.position.z, camera.position.y).add(origin);
-        for (const s of BODIES.moon.sites) {
-          const pos = _sp2.copy(s.dir).multiplyScalar(BODIES.moon.radius).add(moonAbs);
-          if (_ds.copy(camPhys).sub(moonAbs).dot(s.dir) < BODIES.moon.radius) continue; // far side
+        for (const s of M.sites) {
+          const pos = _sp2.copy(s.dir).multiplyScalar(M.radius).add(mabs);
+          if (_ds.copy(camPhys).sub(mabs).dot(s.dir) < M.radius) continue; // far side
           nextSprite('enc', 0.018, 0x66d0ff).position.copy(pos).sub(origin);
           lab(s.name, 'ap', pos);
         }
       }
+      this._fillLine(this.soiLines[id], this.soiPts[id], mabs, origin); // moon SOI
     }
-    // moon SOI
-    const soiPts = [];
-    for (let i = 0; i <= 120; i++) { const a = (i / 120) * Math.PI * 2; soiPts.push(new THREE.Vector3(Math.cos(a) * BODIES.moon.soi, Math.sin(a) * BODIES.moon.soi, 0)); }
-    this._fillLine(this.soiLine, soiPts, moonAbs, origin);
     this.ghostSoi.visible = false;
 
     // vessels
@@ -131,18 +139,22 @@ export class MapView {
       if (bigEnough || v.status !== 'flying') lab(v.name, 'ves', pos);
       if (v.status !== 'flying') continue;
       const patches = world.getPatches(v);
+      const kNode = patches.findIndex((q) => q.type === 'node');
       patches.forEach((p, k) => {
         const B = BODIES[p.bodyId];
-        const rLimit = B.id === 'moon' ? B.soi : 3e7;
+        const firstPost = p.post && k > 0 && patches[k - 1].type === 'node';
+        const rLimit = isMoon(B.id) ? B.soi : 3e7;
         const tA = k === 0 ? world.UT : p.t0;
         const tB = (p.type === 'none' && !p.el.hyper) ? tA + p.el.period : p.t1;
         const pts = sampleConic(p.el, tA, tB, SEG, rLimit);
         // patch around a moon: attach to the moon where it will be (or is)
-        const center = p.bodyId === 'moon' ? world.moonState(p.bodyId === v.body && k === 0 ? world.UT : p.t0).r : new THREE.Vector3();
-        const line = nextLine(active ? COLORS[Math.min(k, 3)] : OTHER);
+        const center = isMoon(p.bodyId) ? world.moonState(p.bodyId === v.body && k === 0 ? world.UT : p.t0, undefined, p.bodyId).r : new THREE.Vector3();
+        const line = nextLine(active ? (p.post ? POST[Math.min(k - kNode - 1, 2)] : COLORS[Math.min(k, 3)]) : OTHER);
         line.material.opacity = active ? 1 : 0.55;
         this._fillLine(line, pts, center, origin);
-        if (active && k === 0 && (p.el.hyper || p.el.a * pxPerM > 70)) {
+        // Ap/Pe of the current orbit, of the first post-node orbit, and the periapsis at a moon encounter
+        const moonPass = k > 0 && isMoon(p.bodyId) && patches[k - 1].type === 'enter';
+        if (active && (k === 0 || firstPost || moonPass) && (p.el.hyper || p.el.a * pxPerM > 70)) {
           const el = p.el, Bb = BODIES[p.bodyId];
           const pe = el.P.clone().multiplyScalar(el.rp).add(center);
           const a1 = nextSprite('pe', 0.022, 0x8fe8ff); a1.position.copy(pe).sub(origin);
@@ -153,16 +165,21 @@ export class MapView {
             lab(`Ap ${fmtDist(el.ra - Bb.radius)}`, 'ap', ap);
           }
         }
+        if (p.type === 'node' && active) {
+          const where = stateAt(p.el, p.t1).r.add(center);
+          const e = nextSprite('node', 0.032, 0xffd84d); e.position.copy(where).sub(origin);
+          lab(`Node ${fmtSpeed(nodeDvTotal(p.node))}`, 'enc', where);
+        }
         if (p.type === 'enter' || p.type === 'exit') {
           const st = stateAt(p.el, p.t1);
           const where = st.r.clone().add(center);
           if (active) {
             const e = nextSprite('enc', 0.03, 0xffb347); e.position.copy(where).sub(origin);
-            lab(p.type === 'enter' ? 'Pell encounter' : 'SOI exit', 'enc', where);
+            lab(p.type === 'enter' ? `${BODIES[p.body].name} encounter` : 'SOI exit', 'enc', where);
           }
           if (p.type === 'enter' && active) {
-            const ms = world.moonState(p.t1).r;
-            this._fillLine(this.ghostSoi, soiPts, ms, origin);
+            const ms = world.moonState(p.t1, undefined, p.body).r;
+            this._fillLine(this.ghostSoi, this.soiPts[p.body], ms, origin);
           }
         }
         if (p.type === 'impact' && active) {

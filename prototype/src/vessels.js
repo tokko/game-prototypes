@@ -39,7 +39,7 @@ export const DEP_NAMES = { panels: 'Solar panels', radiators: 'Radiators', gear:
 /** panels/radiators break off above this acceleration (m/s^2) while extended */
 export const DEP_G_LIMIT = 1.5 * 9.80665;
 
-export const SAS_MODES = ['stab', 'pro', 'retro', 'normal', 'antinormal', 'radial', 'antiradial', 'target', 'antitarget'];
+export const SAS_MODES = ['stab', 'pro', 'retro', 'normal', 'antinormal', 'radial', 'antiradial', 'target', 'antitarget', 'maneuver'];
 
 export class Vessel {
   constructor(id, name, kind) {
@@ -58,6 +58,7 @@ export class Vessel {
     this.throttle = 0;
     this.sas = { on: true, mode: 'stab' };
     this.ap = null;         // autopilot state (autopilot.js)
+    this.nodes = [];        // maneuver nodes [{t, dv: {pro, nrm, rad}}] (m/s in the orbit frame at node time), sorted by t
     this.res = { fuel: this.spec.fuelCap, ox: this.spec.oxCap, ore: 0 };
     this.orbit = null;
     this.railed = true;
@@ -100,6 +101,7 @@ export class Vessel {
       status: this.status, dockedTo: this.dockedTo, landedDir: this.landedDir ? this.landedDir.toArray() : null,
       throttle: this.throttle, sas: { ...this.sas }, res: { ...this.res }, stats: { ...this.stats },
       driving: this.driving, driveSpeed: this.driveSpeed,
+      nodes: this.nodes.map((n) => ({ t: n.t, dv: { ...n.dv } })),
       ec: this.ec, heat: this.heat, dep: JSON.parse(JSON.stringify(this.dep)), autoRet: [...this.autoRet],
     };
   }
@@ -110,6 +112,7 @@ export class Vessel {
     v.landedDir = o.landedDir ? new Vector3().fromArray(o.landedDir) : null;
     v.throttle = o.throttle; v.sas = { ...o.sas }; v.res = { ...o.res }; v.stats = { ...o.stats };
     v.driving = !!o.driving; v.driveSpeed = o.driveSpeed || 0;
+    v.nodes = (o.nodes || []).map((n) => ({ t: n.t, dv: { ...n.dv } }));
     if (o.ec !== undefined) v.ec = o.ec;
     if (o.heat !== undefined) v.heat = o.heat;
     if (o.dep) for (const k of Object.keys(v.dep)) if (o.dep[k]) v.dep[k] = { ...o.dep[k] };

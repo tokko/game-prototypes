@@ -2,14 +2,16 @@
 // thrusting), SOI transitions, ground contact/crash, drilling/refining, docking, objectives,
 // trajectory prediction, quicksave serialization. No rendering and no DOM in here.
 import { Vector3, Quaternion, Matrix4 } from 'three';
-import { BODIES, SUN_DIR } from './bodies.js';
+import { BODIES, SUN_DIR, isMoon } from './bodies.js';
 import {
-  elementsFromState, stateAt, stateFromAnomaly, anomalyAt, TAU,
+  elementsFromState, stateAt, stateFromAnomaly, anomalyAt, TAU, G0, nodeDvVector, nextApoapsisTime, nextPeriapsisTime,
 } from './orbits.js';
 import { Vessel, stepAttitude, snapAttitude, FUEL_FRAC, DOCK_OFFSET, DOCK_ROT, DEP_TIME, DEP_NAMES, DEP_G_LIMIT } from './vessels.js';
 import { updateAutopilot } from './autopilot.js';
 
 export const WARP = [1, 2, 5, 10, 50, 100, 1000, 10000, 100000];
+export const NODE_STEPS = [0.1, 1, 10, 100]; // m/s per node nudge
+export const nodeDvTotal = (n) => Math.hypot(n.dv.pro, n.dv.nrm, n.dv.rad);
 export const THRUST_WARP_MAX = 5; // index of 100x: highest warp allowed while engines burn (sub-stepped, see step())
 const DRILL_RATE = 60;   // kg ore / s (at richness 1)
 const PUMP_RATE = { fuel: 250, ox: 300, ore: 600 }; // kg/s while docked (a few seconds for a full refuel)
@@ -55,6 +57,7 @@ export class World {
     this.headless = !!opts.headless;
     this._evCache = new Map();
     this._patchCache = new Map();
+    this._nodeRev = 0;       // bumped whenever a maneuver node is edited (invalidates cached predictions)
     if (!opts.empty) this.setupInitial();
   }
 
@@ -89,12 +92,28 @@ export class World {
   say(text, kind = 'info') { this.msgs.push({ text, kind }); }
   warpFactor() { return WARP[this.warpIndex]; }
 
-  moonState(t, out = { r: new Vector3(), v: new Vector3() }) { return stateAt(BODIES.moon.orbit, t, out); }
+  /** state of a moon (default Pell) relative to the planet at time t */
+  moonState(t, out = { r: new Vector3(), v: new Vector3() }, id = 'moon') { return stateAt(BODIES[id].orbit, t, out); }
   /** vessel position in the planet-centred inertial frame */
   absPos(v, out = new Vector3()) {
     out.copy(v.r);
-    if (v.body === 'moon') out.add(this.moonState(this.UT, _m).r);
+    if (isMoon(v.body)) out.add(this.moonState(this.UT, _m, v.body).r);
     return out;
+  }
+  /** selected target body (a moon id) and target ore site (a site of that body, or undefined = nearest) */
+  targetBodyId() { return this.flags.tgtBody || 'moon'; }
+  targetSite(bodyId) { return BODIES[bodyId].sites.find((s) => s.id === this.flags.tgtSite) || null; }
+  cycleTargetBody() {
+    const ids = BODIES.planet.children;
+    this.flags.tgtBody = ids[(ids.indexOf(this.targetBodyId()) + 1) % ids.length];
+    if (!this.targetSite(this.flags.tgtBody)) delete this.flags.tgtSite;
+    return this.flags.tgtBody;
+  }
+  cycleTargetSite() {
+    const sites = BODIES[this.targetBodyId()].sites;
+    const i = sites.findIndex((s) => s.id === this.flags.tgtSite) + 1; // 0 = none (auto)
+    if (i >= sites.length) delete this.flags.tgtSite; else this.flags.tgtSite = sites[i].id;
+    return this.targetSite(this.targetBodyId());
   }
   altitude(v) { return v.r.length() - BODIES[v.body].radius; }
   targetOf(v) {
@@ -135,41 +154,44 @@ export class World {
         }
       }
       const alt = this.altitude(a);
-      if (alt < 2000 && a.body === 'moon' && !a.railed) max = Math.min(max, 1);
+      if (alt < 2000 && isMoon(a.body) && !a.railed) max = Math.min(max, 1);
+      if (a.nodes.length && !a.ap) { // do not warp through the start of a planned burn
+        const dt = a.nodes[0].t - this.burnTime(a, nodeDvTotal(a.nodes[0])) / 2 - 30 - this.UT;
+        while (max > 0 && WARP[max] * 3 > dt) max--;
+      }
     } else if (a && a.status === 'landed' && (this.isThrusting(a) || a.driving)) max = Math.min(max, a.driving ? 2 : 1);
     return max;
   }
 
   // ---- events & prediction ------------------------------------------------------------
-  /** next patch event along orbit `el` in body frame: impact / exit / enter / escape */
+  /** next patch event along orbit `el` in body frame: impact / exit / enter (any moon of the planet) / escape */
   findEvent(bodyId, el, t0, off = 0, maxT = 6e5) {
     const B = BODIES[bodyId];
     const touchR = B.radius + off;
-    const moon = bodyId === 'planet' ? BODIES.moon : null;
+    const moons = bodyId === 'planet' ? B.children.map((id) => BODIES[id]).filter((m) => el.rp < m.orbit.a + m.soi && el.ra > m.orbit.a - m.soi) : [];
     const canImpact = el.rp < touchR;
     const canExit = el.hyper || el.ra > B.soi;
-    let canEnter = false;
-    if (moon) { const ma = moon.orbit.a; canEnter = el.rp < ma + moon.soi && el.ra > ma - moon.soi; }
-    if (!canImpact && !canExit && !canEnter) return { type: 'none', t: Infinity, validUntil: Infinity };
-    const horizon = el.hyper ? 3e5 : el.period * (canEnter ? 4.2 : 1.02);
+    if (!canImpact && !canExit && !moons.length) return { type: 'none', t: Infinity, validUntil: Infinity };
+    const horizon = el.hyper ? 3e5 : el.period * (moons.length ? 4.2 : 1.02);
     const tEnd = t0 + Math.min(horizon, maxT);
     const s = { r: new Vector3(), v: new Vector3() };
     const ms = { r: new Vector3(), v: new Vector3() };
     const dist = new Vector3();
+    let hitBody = null;
     const test = (t) => {
       stateAt(el, t, s);
       const rm = s.r.length();
       if (canImpact && rm <= touchR) return 'impact';
-      if (canEnter) {
-        stateAt(moon.orbit, t, ms);
-        if (dist.copy(s.r).sub(ms.r).length() <= moon.soi) return 'enter';
+      for (const m of moons) {
+        stateAt(m.orbit, t, ms);
+        if (dist.copy(s.r).sub(ms.r).length() <= m.soi) { hitBody = m.id; return 'enter'; }
       }
       if (canExit && rm >= B.soi) return bodyId === 'planet' ? 'escape' : 'exit';
       return null;
     };
     let t = t0;
     let hit = test(t);
-    if (hit) return { type: hit, t, body: hit === 'enter' ? 'moon' : null, validUntil: Infinity };
+    if (hit) return { type: hit, t, body: hit === 'enter' ? hitBody : null, validUntil: Infinity };
     let guard = 0;
     while (t < tEnd && guard++ < 60000) {
       stateAt(el, t, s);
@@ -177,11 +199,13 @@ export class World {
       let dmin = Infinity, vb = vm + 1;
       if (canImpact) dmin = Math.min(dmin, Math.abs(rm - touchR));
       if (canExit) dmin = Math.min(dmin, Math.abs(B.soi - rm));
-      if (canEnter) {
-        stateAt(moon.orbit, t, ms);
-        dmin = Math.min(dmin, Math.abs(dist.copy(s.r).sub(ms.r).length() - moon.soi));
-        vb += ms.v.length();
+      let vmoon = 0;
+      for (const m of moons) {
+        stateAt(m.orbit, t, ms);
+        dmin = Math.min(dmin, Math.abs(dist.copy(s.r).sub(ms.r).length() - m.soi));
+        vmoon = Math.max(vmoon, ms.v.length());
       }
+      vb += vmoon;
       let step = Math.min(0.03 * rm / (vm + 1), 0.5 * dmin / vb);
       step = Math.max(0.02, Math.min(1500, step));
       const tn = Math.min(t + step, tEnd);
@@ -190,7 +214,7 @@ export class World {
         let lo = t, hi = tn;
         for (let i = 0; i < 44; i++) { const mid = (lo + hi) / 2; if (test(mid)) hi = mid; else lo = mid; }
         const type = test(hi);
-        return { type, t: hi, body: type === 'enter' ? 'moon' : null, validUntil: Infinity };
+        return { type, t: hi, body: type === 'enter' ? hitBody : null, validUntil: Infinity };
       }
       t = tn;
     }
@@ -217,20 +241,32 @@ export class World {
     return rec;
   }
 
-  /** chain of conic patches for a flying vessel: [{bodyId, el, t0, t1, type, enterBody}] */
-  predict(v, maxPatches = 4) {
+  /** chain of conic patches for a flying vessel: [{bodyId, el, t0, t1, type, body (enter target), post}].
+   *  The first upcoming maneuver node (or `node`) is applied impulsively: the pre-node patch ends with type 'node',
+   *  later patches have post = true. A node that lies beyond a patch event (SOI change, impact) is ignored. */
+  predict(v, maxPatches = 4, node = v.nodes && v.nodes[0]) {
     if (v.status !== 'flying' || !v.orbit) return [];
     const out = [];
-    let bodyId = v.body, el = v.orbit, t = this.UT;
+    let bodyId = v.body, el = v.orbit, t = this.UT, post = false;
+    let pending = node && node.t > this.UT ? node : null;
+    if (pending) maxPatches++;
     for (let k = 0; k < maxPatches; k++) {
       const ev = this.findEvent(bodyId, el, t, v.spec.groundOffset);
+      if (pending && pending.t > t && (ev.type === 'none' || ev.t > pending.t) && pending.t - t < (el.hyper ? 2e5 : el.period * 50)) {
+        out.push({ bodyId, el, t0: t, t1: pending.t, type: 'node', post, node: pending });
+        nodeDvVector(el, pending, _tv, _s); // _s now holds the state at the node time
+        const r = _s.r.clone(), vv = _s.v.clone().add(_tv);
+        el = elementsFromState(BODIES[bodyId].mu, r, vv, pending.t);
+        t = pending.t; post = true; pending = null;
+        continue;
+      }
       const t1 = ev.type === 'none' ? (el.hyper ? t + 2e5 : t + el.period) : ev.t;
-      out.push({ bodyId, el, t0: t, t1, type: ev.type });
+      out.push({ bodyId, el, t0: t, t1, type: ev.type, body: ev.body, post });
       if (ev.type === 'enter' || ev.type === 'exit') {
-        stateAt(el, ev.t, _s); this.moonState(ev.t, _m);
+        stateAt(el, ev.t, _s);
         const r = _s.r.clone(), vv = _s.v.clone();
-        if (ev.type === 'enter') { r.sub(_m.r); vv.sub(_m.v); bodyId = 'moon'; }
-        else { r.add(_m.r); vv.add(_m.v); bodyId = 'planet'; }
+        if (ev.type === 'enter') { this.moonState(ev.t, _m, ev.body); r.sub(_m.r); vv.sub(_m.v); bodyId = ev.body; }
+        else { this.moonState(ev.t, _m, bodyId); r.add(_m.r); vv.add(_m.v); bodyId = 'planet'; }
         el = elementsFromState(BODIES[bodyId].mu, r, vv, ev.t);
         t = ev.t;
       } else break;
@@ -240,10 +276,10 @@ export class World {
   getPatches(v) {
     const now = performance.now();
     const c = this._patchCache.get(v.id);
-    if (c && (c.orbit === v.orbit || now - c.time < 250) && this.UT < c.until && c.status === v.status) return c.patches;
+    if (c && (c.orbit === v.orbit || now - c.time < 250) && this.UT < c.until && c.status === v.status && c.rev === this._nodeRev) return c.patches;
     const patches = this.predict(v);
     const until = patches.length ? patches[0].t1 : Infinity;
-    this._patchCache.set(v.id, { orbit: v.orbit, time: now, patches, until, status: v.status });
+    this._patchCache.set(v.id, { orbit: v.orbit, time: now, patches, until, status: v.status, rev: this._nodeRev });
     return patches;
   }
 
@@ -269,6 +305,7 @@ export class World {
       out.copy(v.r).normalize();
       return m === 'antiradial' ? out.negate() : out;
     }
+    if (m === 'maneuver') return this.maneuverDirection(v, out);
     if (m === 'target' || m === 'antitarget') {
       const t = this.targetOf(v);
       if (!t || t.body !== v.body) return null;
@@ -320,6 +357,7 @@ export class World {
         remaining = Math.min(remaining, dtReal * WARP[THRUST_WARP_MAX]);
       }
     }
+    this._pruneNodes();
     this.updateObjectives();
   }
 
@@ -513,8 +551,8 @@ export class World {
   }
 
   siteNear(v) {
-    if (v.body !== 'moon' || v.status !== 'landed') return null;
-    const B = BODIES.moon;
+    if (!isMoon(v.body) || v.status !== 'landed') return null;
+    const B = BODIES[v.body];
     for (const s of B.sites) {
       const ang = Math.acos(Math.min(1, v.landedDir.dot(s.dir)));
       if (ang * B.radius <= s.radius) return s;
@@ -533,8 +571,8 @@ export class World {
     const vh = _tv.copy(v.v).addScaledVector(_tr, -vr).length();
     v.noseWorld(_nose);
     const tilt = Math.acos(Math.max(-1, Math.min(1, _nose.dot(_tr))));
-    if (B.id !== 'moon' || !v.spec.canLand) {
-      return this._crash(v, B.id !== 'moon' ? 'Impact with Halcyon (atmospheric flight is not simulated)' : `${v.spec.label} hit the surface at ${v.v.length().toFixed(1)} m/s`, v.v.length());
+    if (!isMoon(B.id) || !v.spec.canLand) {
+      return this._crash(v, !isMoon(B.id) ? 'Impact with Halcyon (atmospheric flight is not simulated)' : `${v.spec.label} hit the surface at ${v.v.length().toFixed(1)} m/s`, v.v.length());
     }
     if (v.dep.gear && v.dep.gear.p < 0.85) return this._crash(v, 'Touched down with the landing gear retracted', Math.abs(vr));
     if (Math.abs(vr) > MAX_SAFE_VERTICAL) return this._crash(v, `Hard impact: ${Math.abs(vr).toFixed(1)} m/s vertical (limit ${MAX_SAFE_VERTICAL} m/s)`, Math.abs(vr));
@@ -566,8 +604,9 @@ export class World {
   /** true if the sun is not hidden behind the planet or the moon */
   sunlit(v) {
     this.absPos(v, _sp);
-    const ms = this.moonState(this.UT, { r: new Vector3(), v: new Vector3() }).r;
-    for (const [c, R] of [[_zero, BODIES.planet.radius], [ms, BODIES.moon.radius]]) {
+    const blockers = [[_zero, BODIES.planet.radius]];
+    for (const id of BODIES.planet.children) blockers.push([this.moonState(this.UT, undefined, id).r, BODIES[id].radius]);
+    for (const [c, R] of blockers) {
       _sw.copy(c).sub(_sp);
       const t = _sw.dot(SUN_DIR);
       if (t > 0 && _sw.lengthSq() - t * t < R * R) return false;
@@ -685,20 +724,22 @@ export class World {
   // ---- SOI transitions ------------------------------------------------------------------
   _transitions(v) {
     if (v.status !== 'flying') return;
-    if (v.body === 'moon') {
-      if (v.r.length() >= BODIES.moon.soi) {
-        this.moonState(this.UT, _m);
-        v.r.add(_m.r); v.v.add(_m.v); v.body = 'planet';
+    if (isMoon(v.body)) {
+      if (v.r.length() >= BODIES[v.body].soi) {
+        this.moonState(this.UT, _m, v.body);
+        v.r.add(_m.r); v.v.add(_m.v); v.body = 'planet'; v.nodes = [];
         this._rebuildOrbit(v); this._soiMessage(v, 'Halcyon');
       }
     } else {
-      this.moonState(this.UT, _m);
-      if (_tr.copy(v.r).sub(_m.r).length() <= BODIES.moon.soi) {
-        v.r.sub(_m.r); v.v.sub(_m.v); v.body = 'moon';
-        this._rebuildOrbit(v); this._soiMessage(v, 'Pell');
-      } else if (v.r.length() >= BODIES.planet.soi) {
-        this._crash(v, 'Lost in deep space: escaped the Halcyon system', 0);
+      for (const id of BODIES.planet.children) {
+        this.moonState(this.UT, _m, id);
+        if (_tr.copy(v.r).sub(_m.r).length() <= BODIES[id].soi) {
+          v.r.sub(_m.r); v.v.sub(_m.v); v.body = id; v.nodes = [];
+          this._rebuildOrbit(v); this._soiMessage(v, BODIES[id].name);
+          return;
+        }
       }
+      if (v.r.length() >= BODIES.planet.soi) this._crash(v, 'Lost in deep space: escaped the Halcyon system', 0);
     }
   }
   _soiMessage(v, name) {
@@ -760,6 +801,85 @@ export class World {
     if (v && v.ap) { v.ap = null; v.throttle = 0; if (msg) this.say(msg, 'info'); }
   }
 
+  // ---- maneuver nodes ---------------------------------------------------------------------
+  /** burn duration for `dv` m/s (rocket equation, current mass, thrust and isp) */
+  burnTime(v, dv) {
+    const ve = v.spec.isp * G0, m = this.massOf(v);
+    return (m * ve / v.spec.thrust) * (1 - Math.exp(-Math.abs(dv) / ve));
+  }
+  /** time from burn start to the dv-weighted centre of the burn (later than half the duration: the ship gets lighter) */
+  burnCentroid(v, dv) {
+    const ve = v.spec.isp * G0, m0 = this.massOf(v), m1 = m0 * Math.exp(-Math.abs(dv) / ve), mdot = v.spec.thrust / ve;
+    return dv > 1e-6 ? (m0 - (m0 - m1) / Math.log(m0 / m1)) / mdot : 0;
+  }
+  nodeStep() { return NODE_STEPS[this.flags.nodeStep === undefined ? 2 : this.flags.nodeStep]; }
+  cycleNodeStep() {
+    this.flags.nodeStep = ((this.flags.nodeStep === undefined ? 2 : this.flags.nodeStep) + 1) % NODE_STEPS.length;
+    return this.nodeStep();
+  }
+  /** editing is refused mid-burn; an assist that is only waiting for the node is cancelled (re-engage after editing) */
+  _nodeEditable(v) {
+    if (v.status !== 'flying' || !v.orbit) return 'Maneuver nodes need a free-flying vessel';
+    if (v.ap && v.ap.type === 'node') {
+      if (v.ap.phase === 'burn') return 'Burn in progress';
+      this.cancelAutopilot(v);
+    }
+    return null;
+  }
+  setNode(v, node) { v.nodes = [node]; this._nodeRev++; }
+  /** add a node (zero dv) at the next apoapsis ('ap') or periapsis ('pe'); circular-ish orbits get one 2 minutes ahead */
+  addNode(v, where) {
+    const msg = this._nodeEditable(v);
+    if (msg) return msg;
+    const el = v.orbit, t = this.UT;
+    let tn = Infinity;
+    if (el.e >= 0.005) tn = where === 'ap' ? nextApoapsisTime(el, t) : nextPeriapsisTime(el, t);
+    if (!isFinite(tn) || tn < t) tn = t + 120;
+    else if (tn - t < 10 && !el.hyper) tn += el.period;
+    this.setNode(v, { t: tn, dv: { pro: 0, nrm: 0, rad: 0 } });
+    return null;
+  }
+  /** nudge one component ('pro' | 'nrm' | 'rad') of the first node by the current step */
+  nudgeNode(v, comp, sign) {
+    if (!v.nodes.length) return 'No maneuver node (; or \' adds one)';
+    const msg = this._nodeEditable(v);
+    if (msg) return msg;
+    v.nodes[0].dv[comp] += sign * this.nodeStep();
+    this._nodeRev++;
+    return null;
+  }
+  /** move the first node along the orbit; the time step scales with the orbital period and the step size */
+  shiftNode(v, sign) {
+    if (!v.nodes.length) return 'No maneuver node (; or \' adds one)';
+    const msg = this._nodeEditable(v);
+    if (msg) return msg;
+    const n = v.nodes[0];
+    n.t = Math.max(this.UT + 2, n.t + sign * (v.orbit.hyper ? 60 : v.orbit.period / 2000) * this.nodeStep());
+    this._nodeRev++;
+    return null;
+  }
+  deleteNode(v) {
+    if (!v.nodes.length) return 'No maneuver node';
+    if (v.ap && v.ap.type === 'node') this.cancelAutopilot(v);
+    v.nodes = []; this._nodeRev++;
+    return null;
+  }
+  /** nose direction for the first node's burn vector (inertial), or the assist's live guidance while executing */
+  maneuverDirection(v, out = new Vector3()) {
+    if (v.ap && v.ap.type === 'node' && v.ap.dir) return out.copy(v.ap.dir);
+    if (!v.nodes.length || !v.orbit || v.status !== 'flying') return null;
+    nodeDvVector(v.orbit, v.nodes[0], out);
+    return out.lengthSq() > 1e-12 ? out.normalize() : null;
+  }
+  /** drop nodes that can no longer happen: vessel landed/crashed/docked, or the node time has passed (unless executing) */
+  _pruneNodes() {
+    for (const v of this.vessels) {
+      if (!v.nodes.length) continue;
+      if (v.status !== 'flying') { v.nodes = []; this._nodeRev++; }
+      else if (v.nodes[0].t < this.UT && !(v.ap && v.ap.type === 'node')) { v.nodes = v.nodes.filter((n) => n.t >= this.UT); this._nodeRev++; }
+    }
+  }
+
   // ---- objectives -----------------------------------------------------------------------
   updateObjectives() {
     const C = this.carrier, L = this.lander, d = this.done;
@@ -790,7 +910,7 @@ export class World {
     this.UT = o.UT; this.activeId = o.activeId; this.done = { ...o.done }; this.flags = { ...o.flags };
     this.vessels = o.vessels.map((x) => Vessel.deserialize(x));
     this.status = 'running'; this.crash = null; this.warpIndex = 0; this.pumps = [];
-    this._evCache.clear(); this._patchCache.clear();
+    this._evCache.clear(); this._patchCache.clear(); this._nodeRev++;
     for (const v of this.vessels) this._rebuildOrbit(v);
   }
   clone() {
