@@ -7,8 +7,8 @@ A monorepo of playable three.js browser game prototypes, published together as o
 
 | Game | Source | Site path | Run locally |
 | --- | --- | --- | --- |
-| Halcyon Drift (orbital flight) | `games/halcyon-drift/prototype/` | `/halcyon-drift/` | static, serve the folder |
-| Halcyon Drift: Solar System Explorer | `games/halcyon-drift/explorer/` | `/halcyon-explorer/` | static, serve the folder |
+| Halcyon Drift (Solar System Explorer) | `games/halcyon-drift/explorer/` | `/halcyon-drift/` | static, serve the folder |
+| Halcyon Drift orbital prototype (not deployed) | `games/halcyon-drift/prototype/` | none | static, serve the folder |
 | The Amber Field (Napoleonic battle) | `games/black-powder/` | `/black-powder/` | static, serve the folder |
 | Fogbound Walk (first-person horror walk) | `games/fogbound-walk/` | `/fogbound-walk/` | static, serve the folder |
 | Hive Walker (war-walker action) | `games/hive-walker/` | `/hive-walker/` | static, serve the folder |

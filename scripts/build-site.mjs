@@ -11,8 +11,7 @@ const G = (p) => join(ROOT, 'games', p);
 
 // corner: where the "All games" link sits, picked so it stays clear of each game's HUD.
 const GAMES = [
-  { id: 'halcyon-drift', src: G('halcyon-drift/prototype'), include: ['index.html', 'style.css', 'src'], corner: 'top-center' },
-  { id: 'halcyon-explorer', src: G('halcyon-drift/explorer'), include: ['index.html', 'style.css', 'src', 'assets'], corner: 'bottom-center' },
+  { id: 'halcyon-drift', src: G('halcyon-drift/explorer'), include: ['index.html', 'style.css', 'src', 'assets'], corner: 'bottom-center' },
   { id: 'black-powder', src: G('black-powder'), include: ['index.html', 'style.css', 'src'], corner: 'top-left-offset' },
   {
     id: 'fogbound-walk', src: G('fogbound-walk'), corner: 'top-left',
