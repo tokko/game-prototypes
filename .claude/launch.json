@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8790", "--directory", "prototype"],
       "port": 8790
+    },
+    {
+      "name": "explorer",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8791", "--directory", "explorer"],
+      "port": 8791
     }
   ]
 }

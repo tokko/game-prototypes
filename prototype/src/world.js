@@ -2,7 +2,7 @@
 // thrusting), SOI transitions, ground contact/crash, drilling/refining, docking, objectives,
 // trajectory prediction, quicksave serialization. No rendering and no DOM in here.
 import { Vector3, Quaternion, Matrix4 } from 'three';
-import { BODIES, SUN_DIR, isMoon } from './bodies.js';
+import { BODIES, SUN_DIR, isMoon, sitesOf, ventState } from './bodies.js';
 import {
   elementsFromState, stateAt, stateFromAnomaly, anomalyAt, TAU, G0, nodeDvVector, nextApoapsisTime, nextPeriapsisTime,
 } from './orbits.js';
@@ -38,6 +38,8 @@ const _k1r = new Vector3(), _k1v = new Vector3(), _k2r = new Vector3(), _k2v = n
 const _k3r = new Vector3(), _k3v = new Vector3(), _k4r = new Vector3(), _k4v = new Vector3();
 const _tr = new Vector3(), _tv = new Vector3(), _nose = new Vector3();
 const _zero = new Vector3(), _sp = new Vector3(), _sw = new Vector3(), _sax = new Vector3();
+const _pl = new Vector3(), _plA = new Vector3();
+const PLUME_ACC = 3;   // m/s^2 at the base of an erupting Wren geyser (fades with height)
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 
 export class World {
@@ -58,6 +60,7 @@ export class World {
     this._evCache = new Map();
     this._patchCache = new Map();
     this._nodeRev = 0;       // bumped whenever a maneuver node is edited (invalidates cached predictions)
+    this._syncSurvey();
     if (!opts.empty) this.setupInitial();
   }
 
@@ -100,20 +103,76 @@ export class World {
     if (isMoon(v.body)) out.add(this.moonState(this.UT, _m, v.body).r);
     return out;
   }
-  /** selected target body (a moon id) and target ore site (a site of that body, or undefined = nearest) */
+  // ---- targets ----------------------------------------------------------------------
+  /** selected target body (Halcyon or a moon id) and landing target on it (an ore site, the Spire, a marked point; none = nearest site) */
   targetBodyId() { return this.flags.tgtBody || 'moon'; }
-  targetSite(bodyId) { return BODIES[bodyId].sites.find((s) => s.id === this.flags.tgtSite) || null; }
+  /** landing candidates on a body: known ore sites, plus the Spire's landing spot once its signal is detected */
+  landingSites(bodyId) {
+    const l = [...sitesOf(bodyId)];
+    if (bodyId === 'wren' && this.flags.spireSeen) {
+      const S = BODIES.wren.spire;
+      l.push({ id: 'spire', name: this.flags.spireFound ? 'The Spire' : 'Unidentified signal', dir: S.landDir, markDir: S.dir, radius: 120, spire: true });
+    }
+    return l;
+  }
+  targetSite(bodyId) {
+    const c = this.flags.tgtCustom;
+    if (c && c.body === bodyId) {
+      if (this._customSrc !== c) { this._customSrc = c; this._custom = { id: 'custom', name: 'Marked point', dir: new Vector3().fromArray(c.dir), radius: 60, custom: true }; }
+      return this._custom;
+    }
+    return this.landingSites(bodyId).find((s) => s.id === this.flags.tgtSite) || null;
+  }
+  setTargetBody(id) {
+    if (id !== this.targetBodyId()) { delete this.flags.tgtSite; delete this.flags.tgtCustom; }
+    this.flags.tgtBody = id;
+  }
   cycleTargetBody() {
-    const ids = BODIES.planet.children;
-    this.flags.tgtBody = ids[(ids.indexOf(this.targetBodyId()) + 1) % ids.length];
-    if (!this.targetSite(this.flags.tgtBody)) delete this.flags.tgtSite;
+    const ids = [...BODIES.planet.children, 'planet'];
+    this.setTargetBody(ids[(ids.indexOf(this.targetBodyId()) + 1) % ids.length]);
     return this.flags.tgtBody;
   }
+  /** set the landing target on a moon: a site object (ore site / Spire) or { dir } for a marked point */
+  setLandingTarget(bodyId, site) {
+    this.setTargetBody(bodyId);
+    delete this.flags.tgtSite; delete this.flags.tgtCustom;
+    if (site.id && !site.custom) this.flags.tgtSite = site.id; else this.flags.tgtCustom = { body: bodyId, dir: site.dir.toArray() };
+  }
   cycleTargetSite() {
-    const sites = BODIES[this.targetBodyId()].sites;
-    const i = sites.findIndex((s) => s.id === this.flags.tgtSite) + 1; // 0 = none (auto)
-    if (i >= sites.length) delete this.flags.tgtSite; else this.flags.tgtSite = sites[i].id;
+    const sites = this.landingSites(this.targetBodyId());
+    const i = (this.flags.tgtCustom ? -1 : sites.findIndex((s) => s.id === this.flags.tgtSite)) + 1; // 0 = none (auto)
+    delete this.flags.tgtSite; delete this.flags.tgtCustom;
+    if (i < sites.length) this.flags.tgtSite = sites[i].id;
     return this.targetSite(this.targetBodyId());
+  }
+  /** keep BODIES.wren.survey and the hidden Deep Seam site in step with the saved discovery flag */
+  _syncSurvey() {
+    const W = BODIES.wren, found = !!this.flags.spireFound;
+    if (found) W.survey.spire = { name: 'The Spire', height: W.spire.height, note: 'Crystalline obelisk, no erosion, older than the rift' }; else delete W.survey.spire;
+    for (const s of W.sites) if (s.id === 'wren-seam') s.hidden = !found;
+  }
+  /** a Wren vent is erupting or about to (used to keep warp low near a plume) */
+  ventsBusy() { return BODIES.wren.vents.some((vt) => { const s = ventState(vt, this.UT); return s.active || s.next < 60; }); }
+  /** acceleration from an erupting geyser at a flying vessel's position (body frame); false when outside every active plume */
+  plumeAcc(v, out) {
+    if (v.body !== 'wren' || v.status !== 'flying') return false;
+    const B = BODIES.wren;
+    let hit = false;
+    out.set(0, 0, 0);
+    for (const vt of B.vents) {
+      const st = ventState(vt, this.UT);
+      if (st.k <= 0) continue;
+      const hh = v.r.dot(vt.dir) - B.radius;
+      if (hh < -50 || hh > vt.height) continue;
+      _pl.copy(v.r).addScaledVector(vt.dir, -v.r.dot(vt.dir)); // offset from the vent axis (a radial line)
+      const lat = _pl.length();
+      if (lat > 1500) continue;
+      const a = PLUME_ACC * st.k * (1 - Math.max(0, hh) / vt.height) * (1 - 0.35 * lat / 1500);
+      out.addScaledVector(vt.dir, a);
+      if (lat > 1) out.addScaledVector(_pl, 0.5 * a / lat);
+      hit = true;
+    }
+    return hit;
   }
   altitude(v) { return v.r.length() - BODIES[v.body].radius; }
   targetOf(v) {
@@ -155,6 +214,7 @@ export class World {
       }
       const alt = this.altitude(a);
       if (alt < 2000 && isMoon(a.body) && !a.railed) max = Math.min(max, 1);
+      if (a.body === 'wren' && alt < 30000 && this.ventsBusy()) max = Math.min(max, 3); // never skip across an erupting plume
       if (a.nodes.length && !a.ap) { // do not warp through the start of a planned burn
         const dt = a.nodes[0].t - this.burnTime(a, nodeDvTotal(a.nodes[0])) / 2 - 30 - this.UT;
         while (max > 0 && WARP[max] * 3 > dt) max--;
@@ -252,7 +312,7 @@ export class World {
     if (pending) maxPatches++;
     for (let k = 0; k < maxPatches; k++) {
       const ev = this.findEvent(bodyId, el, t, v.spec.groundOffset);
-      if (pending && pending.t > t && (ev.type === 'none' || ev.t > pending.t) && pending.t - t < (el.hyper ? 2e5 : el.period * 50)) {
+      if (pending && pending.t > t && (ev.type === 'none' || ev.t > pending.t)) {
         out.push({ bodyId, el, t0: t, t1: pending.t, type: 'node', post, node: pending });
         nodeDvVector(el, pending, _tv, _s); // _s now holds the state at the node time
         const r = _s.r.clone(), vv = _s.v.clone().add(_tv);
@@ -391,7 +451,12 @@ export class World {
     if (v.ap) updateAutopilot(this, v, h);
     if (v.status !== 'flying') return;
     const dir = this.sasDirection(v, _nose.clone());
-    const thrusting = this.isThrusting(v);
+    const plume = this.plumeAcc(v, _plA); // inside an erupting geyser column: needs numeric stepping, never rails
+    if (plume !== !!v._inPlume) {
+      v._inPlume = plume;
+      if (plume && isActive) this.say('Caught in a cryo-geyser plume: it is pushing the ship up and out', 'warn');
+    }
+    const thrusting = this.isThrusting(v) || plume;
     if (v.throttle > 0 && !v.hasProp()) { v.throttle = 0; if (isActive) this.say('Out of propellant: engine flameout', 'warn'); }
 
     if (h > 0.25 && !thrusting) {
@@ -402,7 +467,7 @@ export class World {
 
     if (thrusting) {
       if (v.railed) v.railed = false;
-      this._integrate(v, B, h);
+      this._integrate(v, B, h, plume ? _plA : null);
       v.orbit = elementsFromState(B.mu, v.r, v.v, t1);
       this._checkContact(v, B);
     } else {
@@ -413,14 +478,14 @@ export class World {
     }
   }
 
-  _integrate(v, B, h) {
+  _integrate(v, B, h, ext) {
     if (h <= 0) return;
     const mass = this.massOf(v);
     const frac = v.burn(v.massFlow(v.throttle) * h);
     v.noseWorld(_nose);
     const aT = v.spec.thrust * v.throttle * frac / mass;
     const mu = B.mu;
-    const acc = (r, out) => out.copy(r).multiplyScalar(-mu / Math.pow(r.lengthSq(), 1.5)).addScaledVector(_nose, aT);
+    const acc = (r, out) => { out.copy(r).multiplyScalar(-mu / Math.pow(r.lengthSq(), 1.5)).addScaledVector(_nose, aT); if (ext) out.add(ext); return out; };
     const r0 = v.r, v0 = v.v;
     // RK4
     _k1r.copy(v0); acc(r0, _k1v);
@@ -445,6 +510,7 @@ export class World {
     const dq = new Quaternion().setFromUnitVectors(_nose, v.landedDir);
     dq.slerp(new Quaternion(), 1 - Math.min(1, 2.5 * h));
     v.q.premultiply(dq).normalize();
+    if (v.body === 'wren') { this._ventJostle(v, h); if (v.status !== 'landed') return; this._checkSpire(v); }
     // engine on the ground
     if (v.throttle > 0.001 && v.hasProp()) {
       const mass = this.massOf(v);
@@ -469,6 +535,38 @@ export class World {
         v.res.ore += dm; v.stats.mined += dm; v.stats.siteId = site.id;
       }
     }
+  }
+
+  /** landed within 400 m of an erupting Wren vent: the ground shakes and the vessel creeps away; an unbraked rover can flip */
+  _ventJostle(v, h) {
+    const B = BODIES.wren;
+    let j = 0, away = null;
+    for (const vt of B.vents) {
+      const st = ventState(vt, this.UT);
+      if (st.k <= 0) continue;
+      const d = Math.acos(Math.min(1, v.landedDir.dot(vt.dir))) * B.radius;
+      if (d < 400 && st.k * (1 - d / 400) > j) { j = st.k * (1 - d / 400); away = vt; }
+    }
+    v.jostle = j;
+    if (j <= 0) { v.tipT = 0; return; }
+    if (v.id === this.activeId && !(this.UT - (v._jostleMsg || -1e9) < 60)) { v._jostleMsg = this.UT; this.say('Geyser tremors: the ground is shaking', 'warn'); }
+    _tv.copy(v.landedDir).addScaledVector(away.dir, -v.landedDir.dot(away.dir));
+    if (_tv.lengthSq() > 1e-18) v.landedDir.addScaledVector(_tv.normalize(), 2.5 * j * h / B.radius).normalize();
+    if (v.driving && Math.abs(v.driveSpeed) > 1.5 && j > 0.3) {
+      v.tipT = (v.tipT || 0) + h;
+      if (v.tipT > 1.2) this._crash(v, 'The rover was flipped by a geyser eruption', Math.abs(v.driveSpeed));
+    } else v.tipT = Math.max(0, (v.tipT || 0) - h);
+  }
+
+  /** landing or driving within 500 m of the Spire reveals it (and the Deep Seam ore site) */
+  _checkSpire(v) {
+    if (this.flags.spireFound) return;
+    const S = BODIES.wren.spire;
+    if (Math.acos(Math.min(1, v.landedDir.dot(S.dir))) * BODIES.wren.radius > S.detectRange) return;
+    this.flags.spireFound = true; this.flags.spireSeen = true;
+    this._syncSurvey();
+    this.say('The Spire: no tool marks, no erosion, humming in the key of your own hull. Whatever raised it was here before the rift opened.', 'ok');
+    this.say('Survey updated: Deep Seam ore site revealed beside the Spire', 'ok');
   }
 
   /** ISRU refinery: ore -> fuel + oxidizer at the fixed mixture. Works landed or in flight (lander and carrier). */
@@ -553,7 +651,7 @@ export class World {
   siteNear(v) {
     if (!isMoon(v.body) || v.status !== 'landed') return null;
     const B = BODIES[v.body];
-    for (const s of B.sites) {
+    for (const s of sitesOf(v.body)) {
       const ang = Math.acos(Math.min(1, v.landedDir.dot(s.dir)));
       if (ang * B.radius <= s.radius) return s;
     }
@@ -736,6 +834,7 @@ export class World {
         if (_tr.copy(v.r).sub(_m.r).length() <= BODIES[id].soi) {
           v.r.sub(_m.r); v.v.sub(_m.v); v.body = id; v.nodes = [];
           this._rebuildOrbit(v); this._soiMessage(v, BODIES[id].name);
+          if (id === 'wren' && !this.flags.spireSeen) { this.flags.spireSeen = true; this.say("Unidentified signal detected on Wren's surface", 'warn'); }
           return;
         }
       }
@@ -910,7 +1009,7 @@ export class World {
     this.UT = o.UT; this.activeId = o.activeId; this.done = { ...o.done }; this.flags = { ...o.flags };
     this.vessels = o.vessels.map((x) => Vessel.deserialize(x));
     this.status = 'running'; this.crash = null; this.warpIndex = 0; this.pumps = [];
-    this._evCache.clear(); this._patchCache.clear(); this._nodeRev++;
+    this._evCache.clear(); this._patchCache.clear(); this._nodeRev++; this._syncSurvey();
     for (const v of this.vessels) this._rebuildOrbit(v);
   }
   clone() {

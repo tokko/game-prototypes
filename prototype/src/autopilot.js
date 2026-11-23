@@ -2,8 +2,8 @@
 // An autopilot is just state in `vessel.ap`; each sim sub-step it may set `vessel.throttle`,
 // `vessel.ap.dir` (nose direction for SAS) and request time warp. Pure sim, no DOM.
 import { Vector3, Quaternion } from 'three';
-import { BODIES, isMoon } from './bodies.js';
-import { elementsFromState, stateAt, nextApoapsisTime, nextPeriapsisTime, nodeDvVector, TAU, G0 } from './orbits.js';
+import { BODIES, isMoon, sitesOf, ventState } from './bodies.js';
+import { elementsFromState, stateAt, stateFromAnomaly, nextApoapsisTime, nextPeriapsisTime, nodeDvVector, TAU, G0 } from './orbits.js';
 import { WARP, THRUST_WARP_MAX } from './world.js';
 
 const _a = new Vector3(), _b = new Vector3(), _c = new Vector3(), _d = new Vector3();
@@ -41,7 +41,6 @@ export function engageAutopilot(world, v, type) {
     if (v.orbit.e < 0.004) return 'Orbit is already circular';
     v.ap = { type, phase: 'plan' };
   } else if (type === 'xfer') {
-    if (v.body !== 'planet') return 'Transfer assist works from Halcyon orbit';
     const bid = world.targetBodyId();
     const msg = planTransferNode(world, v, bid);
     if (msg) return msg;
@@ -150,17 +149,156 @@ function dvToApo(mu, r, v, raT) {
   return hi;
 }
 
+const fmtWait = (s) => (s < 5400 ? `${(s / 60).toFixed(0)} min` : s < 172800 ? `${(s / 3600).toFixed(1)} h` : `${(s / 86400).toFixed(1)} days`);
+
+/** Transfer planner entry: by where the vessel is (Halcyon orbit or a moon orbit) and what is targeted (a moon or Halcyon) */
+export function planTransferNode(world, v, bodyId) {
+  const el0 = v.orbit;
+  if (v.status !== 'flying' || !el0) return 'Transfers need a free-flying vessel in orbit';
+  if (el0.hyper) return 'Need a bound orbit first (circularize)';
+  if (bodyId === v.body) return v.body === 'planet' ? 'Already orbiting Halcyon: pick a moon with `' : `Already orbiting ${BODIES[bodyId].name}: pick another target with \``;
+  return v.body === 'planet' ? planToMoonNode(world, v, bodyId) : planEjectionNode(world, v, bodyId);
+}
+
+/**
+ * Moon orbit -> the other moon, or back to Halcyon: one prograde ejection node. For every burn time the dv is solved (secant,
+ * analytic hyperbolic exit to the SOI edge, then the planet-frame conic) so the post-exit planet-frame orbit has its apoapsis at the
+ * target moon's orbit (or periapsis at the Halcyon target). The time is scanned over the synodic period (the phasing window can be
+ * days away) and refined through the same findEvent chain the map uses until the target periapsis is met.
+ */
+function planEjectionNode(world, v, bodyId) {
+  const A = BODIES[v.body], P = BODIES.planet, T = BODIES[bodyId], muA = A.mu, muP = P.mu;
+  const el0 = v.orbit, toPlanet = bodyId === 'planet';
+  const rA = A.orbit.a, nA = A.orbit.n, raT = toPlanet ? 0 : T.orbit.a, rpT = P.radius + P.targetPe;
+  const inward = !toPlanet && raT < rA; // planet-frame orbit touches the target moon at its periapsis instead of its apoapsis
+  const peT = toPlanet ? P.targetPe : T.targetPe;
+  const Tv = el0.period, t0 = world.UT;
+  const lead = world.burnTime(v, 300) / 2 + 45;
+  // planet-frame speed the ejection has to leave with -> nominal v-infinity (signed against the moon's own speed)
+  const vreq = Math.sqrt(muP * (2 / rA - 2 / (rA + (toPlanet ? rpT : raT))));
+  const vinf = vreq - nA * rA;
+  const burned = { r: new Vector3(), v: new Vector3() }, q = { r: new Vector3(), v: new Vector3() }, qm = { r: new Vector3(), v: new Vector3() };
+  /** state after burning dv prograde at time tn, followed to the SOI edge: { tExit, el (planet frame) } */
+  const exitState = (tn, dv) => {
+    stateAt(el0, tn, burned);
+    const el = elementsFromState(muA, burned.r, burned.v.clone().multiplyScalar(1 + dv / burned.v.length()), tn);
+    if (!el.hyper) return null;
+    const c = ((A.soi + 1) / -el.a + 1) / el.e;
+    if (c < 1) return null;
+    const F = Math.acosh(c);
+    const tExit = el.t0 + (el.e * Math.sinh(F) - F - el.M0) / el.n;
+    const st = stateFromAnomaly(el, F), ms = world.moonState(tExit, undefined, v.body);
+    st.r.add(ms.r); st.v.add(ms.v);
+    return { tExit, el: elementsFromState(muP, st.r, st.v, tExit) };
+  };
+  const resid = (x) => {
+    if (toPlanet) return x.el.rp - rpT;
+    if (inward) return x.el.hyper ? -1e12 : x.el.rp - raT;
+    return (x.el.hyper ? 1e12 : x.el.ra) - raT;
+  };
+  const solveDv = (tn) => {
+    stateAt(el0, tn, q);
+    const d0 = Math.sqrt(vinf * vinf + 2 * muA / q.r.length()) - q.v.length();
+    let a = d0, b = d0 * 1.02 + 1;
+    const xa = exitState(tn, a), xb = exitState(tn, b);
+    if (!xa || !xb) return null;
+    let fa = resid(xa), fb = resid(xb);
+    for (let i = 0; i < 14 && Math.abs(fb) > 300; i++) {
+      if (fa === fb || !isFinite(fb)) return null;
+      const c = b - fb * (b - a) / (fb - fa);
+      if (!(c > 0)) return null;
+      a = b; fa = fb; b = c;
+      const x = exitState(tn, b);
+      if (!x) return null;
+      fb = resid(x);
+    }
+    return Math.abs(fb) <= 300 ? b : null;
+  };
+  /** signed angle (rad) between the transfer orbit's far point and the target moon when the ship gets there */
+  const phase = (tn) => {
+    const dv = solveDv(tn);
+    if (dv === null) return null;
+    const x = exitState(tn, dv);
+    const tX = inward ? nextPeriapsisTime(x.el, x.tExit) : nextApoapsisTime(x.el, x.tExit);
+    stateAt(x.el, tX, q); stateAt(T.orbit, tX, qm);
+    return { tn, dv, x, delta: Math.atan2(q.r.x * qm.r.y - q.r.y * qm.r.x, q.r.dot(qm.r)), miss: q.r.distanceTo(qm.r) };
+  };
+  const evaluate = (tn) => {
+    const dv = solveDv(tn);
+    if (dv === null) return null;
+    const x = exitState(tn, dv);
+    if (toPlanet) {
+      const ev = world.findEvent('planet', x.el, x.tExit, 0);
+      if (ev.type !== 'none' && ev.t < nextPeriapsisTime(x.el, x.tExit) + 5) return null; // another body in the way
+      return { tn, dv, pe: x.el.rp - P.radius };
+    }
+    const ev = world.findEvent('planet', x.el, x.tExit, 0);
+    if (ev.type !== 'enter' || ev.body !== bodyId) return null; // first encounter must be the target
+    const st = stateAt(x.el, ev.t), ms = world.moonState(ev.t, undefined, bodyId);
+    const e2 = elementsFromState(T.mu, st.r.sub(ms.r), st.v.sub(ms.v), ev.t);
+    return { tn, dv, pe: e2.rp - T.radius };
+  };
+  let best = null;
+  const consider = (r) => { if (r && (!best || Math.abs(r.pe - peT) < Math.abs(best.pe - peT))) best = r; };
+  let span;
+  if (toPlanet) {
+    span = 2 * Tv;
+    const hits = [];
+    for (let d = 0; d < span; d += Tv / 60) { const r = evaluate(t0 + lead + d); if (r) hits.push(r); }
+    if (hits.length) best = hits.reduce((a, b) => (b.dv < a.dv ? b : a)); // cheapest ejection
+  } else {
+    // The far point sweeps round the moon's orbit once per orbit of the ship, so the arrival phase lines up at one burn time per
+    // orbit; the cheap ones cluster at the synodic window. Find every zero of the phase miss, then take the best dv-vs-wait trade.
+    span = 1.05 * TAU / Math.abs(nA - T.orbit.n);
+    const cs = Math.min(Tv / 40, 60);
+    const roots = [];
+    let prev = null;
+    for (let d = 0; d < span; d += cs) {
+      const p = phase(t0 + lead + d);
+      if (p && prev && Math.abs(p.delta) < 1 && Math.abs(prev.delta) < 1 && (p.delta > 0) !== (prev.delta > 0)) {
+        let lo = prev, hi = p;
+        for (let i = 0; i < 30 && hi.tn - lo.tn > 0.01; i++) {
+          const m = phase((lo.tn + hi.tn) / 2);
+          if (!m) { lo = null; break; }
+          if ((m.delta > 0) === (lo.delta > 0)) lo = m; else hi = m;
+        }
+        if (lo) roots.push({ tn: hi.tn, dv: hi.dv });
+      }
+      prev = p;
+    }
+    roots.sort((a, b) => (a.dv + (a.tn - t0) / 3000) - (b.dv + (b.tn - t0) / 3000));
+    for (const r of roots) {
+      // aim the encounter periapsis: at the root the moon is hit dead centre, so offset the burn time until pe matches the target
+      best = null;
+      let step = 120; // the miss changes slowly with burn time (about 1 km per 0.4 s here)
+      for (let level = 0; level < 6; level++) {
+        const c = best ? best.tn : r.tn, sub = step / 10;
+        for (let t = c - step; t <= c + step + 1e-9; t += sub) if (t >= t0 + lead) consider(evaluate(t));
+        step = sub;
+      }
+      if (best) break;
+    }
+  }
+  if (!best) return `No ${T.name} window found within ${fmtWait(span)}: try a different orbit`;
+  const msg = world._nodeEditable(v);
+  if (msg) return msg;
+  world.setNode(v, { t: best.tn, dv: { pro: best.dv, nrm: 0, rad: 0 } });
+  if (!world.headless) {
+    if (Math.abs(best.pe - peT) > 0.3 * peT + 3000) world.say(`Warning: predicted ${T.name} periapsis ${(best.pe / 1000).toFixed(0)} km misses the ${(peT / 1000).toFixed(0)} km target`, 'warn');
+    world.say(`${toPlanet ? 'Return to Halcyon' : `Transfer to ${T.name}`} planned: node in ${fmtWait(best.tn - t0)}, ${best.dv.toFixed(0)} m/s, periapsis ~${(best.pe / 1000).toFixed(0)} km`, 'info');
+  }
+  return null;
+}
+
 /**
  * Plan a transfer to a moon as a prograde node. For every departure time over one orbit the node dv is the Hohmann-style
  * burn that puts the apoapsis at the moon's orbit; the departure time is then refined (impulsive model, same findEvent
  * the map uses) until the encounter periapsis matches the body's target. The node executor guides against the planned
  * post-node orbit, so the finite burn reproduces this impulsive solution.
  */
-export function planTransferNode(world, v, bodyId) {
+function planToMoonNode(world, v, bodyId) {
   const P = BODIES.planet, M = BODIES[bodyId], mu = P.mu;
   const el0 = v.orbit;
-  if (v.body !== 'planet') return 'Transfers are planned from Halcyon orbit';
-  if (v.status !== 'flying' || !el0 || el0.hyper) return 'Need a bound orbit around Halcyon';
   const raT = M.orbit.a, T = el0.period, t0 = world.UT;
   const lead = world.burnTime(v, 1000) / 2 + 45; // earliest node: time to turn the ship and start the burn
   const evaluate = (delta) => {
@@ -248,7 +386,9 @@ function runNode(world, v, ap, h) {
   if (remM > 1e-6) ap.dir.copy(rem).divideScalar(remM);
   if (remM < 0.004 || (ap.started && rem.dot(ap.d0) < 0)) {
     v.nodes.shift(); world._nodeRev++;
-    return finish(world, v, ap.msg || `Maneuver complete (${remM.toFixed(2)} m/s off)`);
+    finish(world, v, ap.msg || `Maneuver complete (${remM.toFixed(2)} m/s off)`);
+    if (ap.then === 'land' && !engageAutopilot(world, v, 'land')) { v.ap.pc = ap.pc; v.ap.pref = ap.pref; } // landing assist continues after the plane change
+    return;
   }
   const acc = accelOf(world, v);
   const thr = Math.min(1, remM / (acc * h), Math.max(0.05, remM / (acc * 0.5))); // taper, last step is dead-beat
@@ -277,7 +417,7 @@ export function landingArc(world, v) {
   let guard = 0;
   while (sv.status === 'flying' && guard++ < 120000) w.advance(0.05);
   if (sv.status !== 'landed') return null;
-  return { arc: angleAhead(v.r, sv.r, W), dir: sv.landedDir.clone() };
+  return { arc: angleAhead(v.r, sv.r, W), dir: sv.landedDir.clone(), t: w.UT - world.UT };
 }
 
 function brakeEndAlt(world, v, B) {
@@ -305,6 +445,48 @@ function ensureGear(world, v) {
   if (g && g.ok && g.t < 1) { g.t = 1; if (!world.headless) world.say('Landing assist: deploying landing gear', 'info'); }
 }
 
+/**
+ * Landing needs the site in the orbit plane (moons do not rotate, the descent stays in the plane). Plan one node that rotates the
+ * velocity about the radius vector so the new plane contains site direction s, at the cheapest point of the next orbit (the line of
+ * nodes), and hand it to the node executor, which resumes the landing assist when done. Returns an error message or null.
+ */
+function planLandPlaneChange(world, v, site, W) {
+  const el = v.orbit, s = site.dir, t0 = world.UT;
+  const speed = v.v.length();
+  const tl = t0 + world.burnCentroid(v, 2 * speed) + 30; // earliest burn centre: time to turn the ship and start
+  const st = { r: new Vector3(), v: new Vector3() }, rh = new Vector3(), n2 = new Vector3(), Wt = new Vector3(), dvv = new Vector3();
+  const cands = [];
+  const N = 240;
+  for (let k = 0; k < N; k++) {
+    const t = tl + el.period * k / N;
+    stateAt(el, t, st);
+    rh.copy(st.r).normalize();
+    n2.crossVectors(rh, s);
+    const len = n2.length();
+    if (len < 1e-3) continue; // site straight above/below: any plane contains it
+    Wt.crossVectors(st.r, st.v).normalize();
+    n2.divideScalar(len);
+    if (n2.dot(Wt) < 0) n2.negate(); // keep the direction of travel
+    const alpha = Math.atan2(rh.dot(_a.crossVectors(Wt, n2)), Wt.dot(n2));
+    dvv.copy(st.v).applyAxisAngle(rh, alpha).sub(st.v);
+    cands.push({ t, alpha, dv: dvv.length(), pro: dvv.dot(_b.copy(st.v).normalize()), nrm: dvv.dot(Wt), rad: dvv.dot(_c.crossVectors(_b, Wt)) });
+  }
+  if (!cands.length) return null;
+  const minDv = Math.min(...cands.map((c) => c.dv));
+  const c = cands.find((x) => x.dv <= minDv * 1.01 + 0.5); // the two nodes are equally cheap: take the earlier
+  const ve = v.spec.isp * G0, m = world.massOf(v);
+  const avail = ve * Math.log(m / Math.max(1, m - v.propMass));
+  const deg = (Math.abs(c.alpha) * 180 / Math.PI).toFixed(0);
+  const reserve = 2 * speed; // a full descent costs ~1.8x the orbital speed (deorbit, brake, hover)
+  if (c.dv + reserve > avail) return `Landing assist: plane change to ${site.name} needs ${c.dv.toFixed(0)} m/s, only ${Math.max(0, avail - reserve).toFixed(0)} available`;
+  const msg = world._nodeEditable(v);
+  if (msg) return msg;
+  world.setNode(v, { t: c.t, dv: { pro: c.pro, nrm: c.nrm, rad: c.rad } });
+  v.ap = { type: 'node', phase: 'plan', body: v.body, msg: 'Plane change complete: resuming landing assist' };
+  if (!world.headless) world.say(`Landing assist: plane change ${deg}° (${c.dv.toFixed(0)} m/s) before descent to ${site.name}`, 'info');
+  return null;
+}
+
 function runLand(world, v, ap) {
   ensureGear(world, v);
   const B = BODIES[v.body];
@@ -325,14 +507,31 @@ function runLand(world, v, ap) {
       if (!sol) { v.ap = null; if (!world.headless) world.say('Landing assist: could not find a descent (low propellant?)', 'bad'); return; }
       const W = new Vector3().crossVectors(v.r, v.v).normalize();
       // the selected site of this moon, else the ore site that needs the least waiting
-      const sel = world.targetSite(v.body);
-      let bestWait = Infinity, best = null;
-      for (const s of (sel ? [sel] : B.sites)) {
+      const sel = ap.pref || world.targetSite(v.body); // pref: the site a finished plane change was for
+      const missOf = (s) => Math.asin(Math.min(1, Math.abs(s.dir.dot(W)))) * R; // out-of-plane distance of a site
+      let bestWait = Infinity, best = null, bestMiss = Infinity;
+      for (const s of (sel ? [sel] : sitesOf(v.body))) {
         const ahead = angleAhead(v.r, s.dir.clone().multiplyScalar(R), W);
         const wait = ((ahead - sol.arc) % TAU + TAU) % TAU;
-        if (wait < bestWait) { bestWait = wait; best = s; }
+        // without a selected site prefer one already in the orbit plane, else the one needing the smallest plane change
+        const miss = sel ? 0 : Math.max(150, missOf(s));
+        if (miss < bestMiss || (miss === bestMiss && wait < bestWait)) { bestMiss = miss; bestWait = wait; best = s; }
+      }
+      const pc = ap.pc || 0;
+      if (pc < 2 && !v.orbit.hyper && missOf(best) > (pc ? 300 : 150)) { // the landing only follows the orbit plane: change plane first
+        const pcMsg = planLandPlaneChange(world, v, best, W);
+        if (pcMsg) { v.ap = null; v.throttle = 0; if (!world.headless) world.say(pcMsg, 'bad'); return; }
+        v.ap.then = 'land'; v.ap.pc = pc + 1; v.ap.pref = best;
+        return;
       }
       ap.site = best; ap.arc = sol.arc; ap.phase = 'coast';
+      if (v.body === 'wren' && !world.headless) { // warn when the target sits next to a geyser that will be erupting at touchdown
+        const tTouch = world.UT + bestWait / (_c.crossVectors(v.r, v.v).length() / (rm * rm)) + sol.t;
+        for (const vt of B.vents) {
+          const d = Math.acos(Math.min(1, best.dir.dot(vt.dir))) * R;
+          if (d < 1500 && ventState(vt, tTouch).active) world.say(`Warning: a geyser ${d.toFixed(0)} m from ${best.name} will be erupting at touchdown`, 'warn');
+        }
+      }
       if (!world.headless) world.say(`Landing assist: targeting ${best.name}`, 'info');
     }
   }

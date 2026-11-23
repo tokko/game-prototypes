@@ -5,12 +5,12 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { BODIES, SUN_DIR, isMoon } from './bodies.js';
+import { BODIES, SUN_DIR, isMoon, ventState } from './bodies.js';
 import { World, WARP } from './world.js';
 import { DOCK_OFFSET, DOCK_ROT, DEP_NAMES } from './vessels.js';
 import { engageAutopilot, planTransferNode, planCircNode, AP_NAMES } from './autopilot.js';
 import { createCarrier, createLander, applyDeploy } from './models.js';
-import { createSky, createPlanet, createAtmosphere, createMoon, createGroundPatch, createSiteMarker } from './sky.js';
+import { createSky, createPlanet, createAtmosphere, createMoon, createGroundPatch, createSiteMarker, createSpire, createPlume, createRing } from './sky.js';
 import { MapView } from './map.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
@@ -57,11 +57,17 @@ const atmo = createAtmosphere(BODIES.planet.radius, BODIES.planet.atmosphere.hei
 const moonVis = {};
 for (const id of BODIES.planet.children) {
   const B = BODIES[id];
-  const mesh = createMoon(B.radius); mesh.scale.setScalar((B.radius - 1.2) / B.radius); world3.add(mesh);
-  const gp = createGroundPatch(B.radius); world3.add(gp);
-  if (id === 'wren') { mesh.material.color.setRGB(0.82, 0.92, 1.0); gp.material.color.setRGB(0.82, 0.92, 1.0); } // slightly bluer, darker rock
+  const look = id === 'wren' ? { scale: B.craterScale, ice: true, rift: B.rift, vents: B.vents.map((vt) => vt.dir.clone().multiplyScalar(B.radius)) } : undefined; // Wren: pale ice, small craters, glowing rift
+  const mesh = createMoon(B.radius, look); mesh.scale.setScalar((B.radius - 1.2) / B.radius); world3.add(mesh);
+  const gp = createGroundPatch(B.radius, look); world3.add(gp);
   moonVis[id] = { mesh, patch: gp, markers: B.sites.map((s) => { const m = createSiteMarker(s); world3.add(m); return m; }) };
 }
+// Wren extras: debris ring, four geyser plumes, the Spire
+const wrenVis = { ring: createRing(BODIES.wren.ring.inner, BODIES.wren.ring.outer, sunRender), spire: createSpire(BODIES.wren.spire.height), plumes: BODIES.wren.vents.map((vt, i) => createPlume(vt.height, i + 1, sunRender)) };
+world3.add(wrenVis.ring, wrenVis.spire);
+for (const p of wrenVis.plumes) world3.add(p.points);
+// custom landing target ("Marked point"): one magenta beacon that follows the selection
+const customMarker = createSiteMarker({ radius: 60, dir: new THREE.Vector3(1, 0, 0), custom: true }, new THREE.Color(1.6, 0.45, 1.4)); customMarker.visible = false; world3.add(customMarker);
 const moonMesh = moonVis.moon.mesh, patch = moonVis.moon.patch, markers = moonVis.moon.markers;
 
 // ------------------------------------------------------------------------------ post
@@ -149,6 +155,8 @@ function onAction(name, arg) {
   if (name === 'help') { $('help').classList.toggle('hidden'); return; }
   if (name === 'map') { toggleMap(); return; }
   if (name === 'map-focus') { mcam.focus = (mcam.focus + 1) % 4; hud.toast(['Focus: vessel', 'Focus: Halcyon', 'Focus: Pell', 'Focus: Wren'][mcam.focus]); return; }
+  if (name === 'menu-close') return closeMenu();
+  if (name === 'context') return onContext(arg.x, arg.y);
   if (name === 'quicksave') return quicksave();
   if (name === 'quickload') return quickload();
   if (name === 'pause') { paused = !paused; return; }
@@ -167,7 +175,12 @@ function onAction(name, arg) {
     case 'node-step': hud.toast(`Node step: ${world.cycleNodeStep()} m/s`); break;
     case 'node-del': { const msg = world.deleteNode(v); hud.toast(msg || 'Maneuver node deleted', msg ? 'warn' : 'info'); break; }
     case 'tgt-body': hud.toast(`Target body: ${BODIES[world.cycleTargetBody()].name}`); break;
-    case 'tgt-site': { const s = world.cycleTargetSite(); hud.toast(`Target site: ${s ? s.name : 'auto (nearest)'} on ${BODIES[world.targetBodyId()].name}`); break; }
+    case 'tgt-site': {
+      if (world.targetBodyId() === 'planet') { hud.toast('Halcyon has no landing targets: pick a moon first (`)', 'warn'); break; }
+      const s = world.cycleTargetSite();
+      hud.toast(`Landing target: ${s ? s.name : 'auto (nearest site)'} on ${BODIES[world.targetBodyId()].name}`);
+      break;
+    }
     case 'plan-xfer': { const msg = planTransferNode(world, v, world.targetBodyId()); if (msg) hud.toast(msg, 'warn'); break; }
     case 'plan-circ-ap': case 'plan-circ-pe': { const msg = planCircNode(world, v, name === 'plan-circ-ap' ? 'ap' : 'pe'); if (msg) hud.toast(msg, 'warn'); break; }
     case 'cancel': if (v.ap) world.cancelAutopilot(v, 'Autopilot cancelled'); v.drilling = false; v.refining = false; break;
@@ -203,7 +216,37 @@ for (const b of document.querySelectorAll('#actbtns button')) b.addEventListener
 const MN_ACT = { tbody: 'tgt-body', tsite: 'tgt-site', xfer: 'plan-xfer', circap: 'plan-circ-ap', circpe: 'plan-circ-pe', exec: 'node', del: 'node-del' };
 for (const b of document.querySelectorAll('#mn-btns button')) b.addEventListener('click', () => onAction(MN_ACT[b.dataset.mn]));
 for (const b of document.querySelectorAll('#sas button')) b.addEventListener('click', () => onAction(b.dataset.sas === 'toggle' ? 'sas-toggle' : 'sas-mode', b.dataset.sas));
-function toggleMap() { mapOn = !mapOn; map.setVisible(mapOn); document.body.classList.toggle('map', mapOn); }
+// ------------------------------------------------------------------------------ map context menu
+const ctxMenu = $('ctxmenu');
+function closeMenu() { ctxMenu.classList.add('hidden'); }
+function openMenu(items, x, y) {
+  ctxMenu.innerHTML = '';
+  for (const [label, fn] of items) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.addEventListener('click', () => { closeMenu(); fn(); });
+    ctxMenu.appendChild(b);
+  }
+  ctxMenu.classList.remove('hidden');
+  ctxMenu.style.left = `${Math.min(x, innerWidth - ctxMenu.offsetWidth - 6)}px`;
+  ctxMenu.style.top = `${Math.min(y, innerHeight - ctxMenu.offsetHeight - 6)}px`;
+}
+function onContext(x, y) {
+  closeMenu();
+  if (!mapOn) return;
+  const hit = map.pick(camera, { x: innerWidth, y: innerHeight }, x, y);
+  if (!hit) return;
+  const items = [];
+  const focusItem = (id) => ['Focus camera', () => { mcam.focus = id === 'planet' ? 1 : 2 + BODIES.planet.children.indexOf(id); hud.toast(`Focus: ${BODIES[id].name}`); }];
+  const targetItem = (id) => [`Set target: ${BODIES[id].name}`, () => { world.setTargetBody(id); hud.toast(`Target body: ${BODIES[id].name}`); }];
+  if (hit.kind === 'site') {
+    items.push([`Set landing target: ${hit.site.name}`, () => { world.setLandingTarget(hit.body, hit.site); hud.toast(`Landing target: ${hit.site.name} on ${BODIES[hit.body].name}`); }]);
+  } else if (hit.kind === 'surface') {
+    items.push(['Set landing target here', () => { world.setLandingTarget(hit.body, { dir: hit.dir }); hud.toast(`Landing target: marked point on ${BODIES[hit.body].name}`); }], targetItem(hit.body), focusItem(hit.body));
+  } else items.push(targetItem(hit.id), focusItem(hit.id));
+  openMenu(items, x, y);
+}
+function toggleMap() { closeMenu(); mapOn = !mapOn; map.setVisible(mapOn); document.body.classList.toggle('map', mapOn); }
 
 // ------------------------------------------------------------------------------ crash fx
 let crashShown = false, explosion = null, crashTime = 0;
@@ -297,11 +340,42 @@ function render(dt) {
       m.position.copy(mv.mesh.position).addScaledVector(s.dir, MB.radius);
       m.quaternion.setFromUnitVectors(Zaxis, s.dir);
       const dist = m.position.length();
-      m.visible = !mapOn && dist < 3e6;
+      m.visible = !s.hidden && !mapOn && dist < 3e6;
       m.userData.beamMat.uniforms.uTime.value = clock;
       m.userData.sprite.visible = dist > 2500; // far-away glow only; up close the ring and beam mark the site
       m.userData.sprite.scale.setScalar(Math.max(300, dist * 0.012));
     });
+  }
+
+  // --- landing target marked on the map: a magenta beacon on whichever moon it belongs to
+  const cs = world.flags.tgtCustom;
+  customMarker.visible = !!cs && !mapOn;
+  if (cs) {
+    const cd = _v2.fromArray(cs.dir);
+    customMarker.position.copy(moonVis[cs.body].mesh.position).addScaledVector(cd, BODIES[cs.body].radius);
+    customMarker.quaternion.setFromUnitVectors(Zaxis, cd);
+    customMarker.userData.beamMat.uniforms.uTime.value = clock;
+    const cdist = customMarker.position.length();
+    customMarker.userData.sprite.visible = cdist > 2500;
+    customMarker.userData.sprite.scale.setScalar(Math.max(300, cdist * 0.012));
+  }
+  // --- Wren: ring, geyser plumes, the Spire
+  {
+    const W = BODIES.wren, wp = moonVis.wren.mesh.position, wdist = wp.length();
+    wrenVis.ring.position.copy(wp); wrenVis.ring.visible = !mapOn && wdist < 4e6;
+    wrenVis.ring.rotation.z = (world.UT * 0.003) % (Math.PI * 2); wrenVis.ring.userData.update(clock); // clumps drift at the Kepler rate (faster under warp)
+    W.vents.forEach((vt, i) => {
+      const pl = wrenVis.plumes[i], k = ventState(vt, world.UT).k;
+      pl.points.position.copy(wp).addScaledVector(vt.dir, W.radius);
+      pl.points.quaternion.setFromUnitVectors(Zaxis, vt.dir);
+      pl.update(clock, mapOn || wdist > 4e6 ? 0 : k);
+    });
+    const sp = wrenVis.spire, S = W.spire;
+    sp.position.copy(wp).addScaledVector(S.dir, W.radius - 5);
+    sp.quaternion.setFromUnitVectors(Zaxis, S.dir);
+    sp.visible = !mapOn && wdist < 4e6;
+    const tipDist = _v1.copy(sp.position).addScaledVector(S.dir, S.height).length();
+    sp.userData.update(clock, tipDist, !!world.flags.spireSeen); // the secret stays gated on spireSeen
   }
 
   // --- vessels
@@ -408,6 +482,6 @@ function resize() {
 addEventListener('resize', resize);
 resize();
 
-window.__game = { dbg, world, hud, onAction, fcam, mcam, input, THREE, renderer, camera, scene, patch, markers, moonMesh, moonVis, toggleMap: () => toggleMap(), setPaused: (p) => { paused = p; } };
+window.__game = { dbg, world, hud, onAction, BODIES, ventState, map, wrenVis, fcam, mcam, input, THREE, renderer, camera, scene, patch, markers, moonMesh, moonVis, toggleMap: () => toggleMap(), setPaused: (p) => { paused = p; } };
 requestAnimationFrame((t) => { last = t; $('loading').classList.add('gone'); hud.toast('Welcome aboard. F1 for controls, M for the map.', 'info'); requestAnimationFrame(frame); });
 window.__ready = true;

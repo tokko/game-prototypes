@@ -1,7 +1,7 @@
 // HUD: DOM panels (objectives, flight data, actions, resources) + a WebGL navball drawn
 // into the bottom-left corner of the main canvas.
 import * as THREE from 'three';
-import { BODIES, isMoon } from './bodies.js';
+import { BODIES, isMoon, sitesOf } from './bodies.js';
 import { OBJECTIVES, WARP, nodeDvTotal } from './world.js';
 import { nextApoapsisTime, nextPeriapsisTime } from './orbits.js';
 import { AP_NAMES } from './autopilot.js';
@@ -146,7 +146,7 @@ function nearestSite(v) {
   if (!isMoon(v.body) || !v.landedDir) return null;
   const B = BODIES[v.body];
   let best = null;
-  for (const s of B.sites) {
+  for (const s of sitesOf(v.body)) {
     const ang = Math.acos(Math.min(1, v.landedDir.dot(s.dir)));
     const d = ang * B.radius;
     if (!best || d < best.d) best = { s, d };
@@ -299,7 +299,7 @@ export class Hud {
     const C = world.carrier, L = world.lander;
     const can = {
       undock: v === C && L.status === 'docked' && C.status === 'flying',
-      xfer: v.body === 'planet' && v.status === 'flying',
+      xfer: v.status === 'flying' && !!v.orbit && v.body !== world.targetBodyId(),
       circ: v.status === 'flying' && !!v.orbit,
       land: v.kind === 'lander' && isMoon(v.body) && v.status === 'flying',
       drill: v.kind === 'lander' && landed,
@@ -390,7 +390,7 @@ export class Hud {
   /** Maneuver panel: target body/site, first node (dv, time, burn estimate, post-node orbit) and planner button states */
   updateManeuver(world, v) {
     const TB = BODIES[world.targetBodyId()], site = world.targetSite(TB.id);
-    $('mn-tgt').textContent = `${TB.name} / ${site ? site.name : 'auto site'}`;
+    $('mn-tgt').textContent = TB.id === 'planet' ? 'Halcyon (return)' : `${TB.name} / ${site ? site.name : 'auto site'}`;
     const flying = v.status === 'flying' && !!v.orbit;
     const n = flying ? v.nodes[0] : null;
     $('mn-info').style.display = n ? 'block' : 'none';
@@ -403,7 +403,7 @@ export class Hud {
       $('mn-burn').textContent = `Burn ${fmtDur(world.burnTime(v, dvm))}`;
       $('mn-state').textContent = v.ap && v.ap.type === 'node' ? v.ap.phase : '';
       const post = world.getPatches(v).filter((p) => p.post);
-      const enc = post.find((p) => p.bodyId !== v.body && isMoon(p.bodyId));
+      const enc = post.find((p) => p.bodyId !== v.body && isMoon(p.bodyId)) || (v.body !== 'planet' ? post.find((p) => p.bodyId === 'planet') : null);
       let txt = '';
       if (enc) txt = `${BODIES[enc.bodyId].name}: Pe ${fmtDist(enc.el.rp - BODIES[enc.bodyId].radius)}`;
       else if (post.length) {
@@ -412,7 +412,7 @@ export class Hud {
       }
       $('mn-post').textContent = txt;
     }
-    const can = { tbody: true, tsite: true, xfer: flying && v.body === 'planet', circap: flying && !v.orbit.hyper, circpe: flying, exec: !!n, del: !!n };
+    const can = { tbody: true, tsite: true, xfer: flying && v.body !== world.targetBodyId(), circap: flying && !v.orbit.hyper, circpe: flying, exec: !!n, del: !!n };
     for (const b of document.querySelectorAll('#mn-btns button')) {
       b.classList.toggle('off', !can[b.dataset.mn]);
       b.classList.toggle('live', b.dataset.mn === 'exec' && !!(v.ap && v.ap.type === 'node'));

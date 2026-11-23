@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Halcyon Drift - Solar System Explorer</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<div id="hud" class="hidden">
+  <div id="topbar">
+    <div id="modeLabel"><b id="ml-mode">ORBIT</b><span id="ml-sub"></span></div>
+    <div id="compass"><canvas id="compassCv" width="640" height="40"></canvas></div>
+    <div id="topbtns">
+      <button data-act="map" title="M">Map</button>
+      <button data-act="journal" title="J">Journal</button>
+      <button data-act="help" title="F1 / H">Help</button>
+    </div>
+  </div>
+  <div id="toasts"></div>
+  <div id="prompt"></div>
+
+  <div id="gauges" class="panel">
+    <div class="row"><span id="g1l">ALT</span><b id="g1">-</b></div>
+    <div class="row"><span id="g2l">V.SPD</span><b id="g2">-</b></div>
+    <div class="row"><span id="g3l">H.SPD</span><b id="g3">-</b></div>
+    <div class="row sub" id="gAirRow"><span>AIR</span><b id="gAir">-</b></div>
+    <div id="bars">
+      <div class="bar"><i id="b-fuel"></i><em id="b-fuel-l">FUEL</em></div>
+      <div class="bar"><i id="b-ox"></i><em id="b-ox-l">OX</em></div>
+      <div class="bar" id="bar3"><i id="b-h2"></i><em id="b-h2-l">H2</em></div>
+      <div class="bar" id="barpwr"><i id="b-pwr"></i><em id="b-pwr-l">PWR</em></div>
+      <div class="bar" id="barheat"><i id="b-heat"></i><em id="b-heat-l">HEAT</em></div>
+      <div class="bar" id="barskin"><i id="b-skin"></i><em id="b-skin-l">SKIN</em></div>
+      <div class="bar" id="barthr"><i id="b-thr"></i><em id="b-thr-l">THR</em></div>
+    </div>
+    <div class="row sub"><span>DELTA-V</span><b id="gdv">-</b></div>
+    <div class="row sub" id="flags"></div>
+  </div>
+
+  <div id="craftbtns" class="panel hidden"></div>
+  <div id="orbitbtns" class="panel hidden"></div>
+
+  <div id="inv" class="panel"><span id="inv-text"></span></div>
+  <div id="survey" class="panel hidden">
+    <div class="sv-title">GROUND SURVEY</div>
+    <div class="sv-bar"><i id="sv-fill"></i><em id="sv-pct">-</em></div>
+    <div class="sv-row"><span id="sv-arrow">&#10148;</span><span id="sv-text">-</span></div>
+  </div>
+  <div id="hint">F1 help</div>
+</div>
+
+<div id="map" class="overlay hidden">
+  <div class="mapwrap">
+    <canvas id="mapCv"></canvas>
+    <div id="mapSide" class="panel"></div>
+    <button id="mapClose">Close (M)</button>
+  </div>
+</div>
+<div id="journal" class="overlay hidden"><div class="card"><h2>Journal</h2><div id="journalBody"></div><p class="dim">J or Esc to close</p></div></div>
+<div id="help" class="overlay hidden"><div class="card"><h2>Controls</h2><div id="helpBody"></div><p class="dim">F1 / H or Esc to close</p></div></div>
+<div id="title" class="overlay">
+  <div class="card titlecard">
+    <div class="logo">HALCYON DRIFT</div>
+    <h1>Kestrel</h1>
+    <p class="dim" id="titleSub">Surveying the moon of Tamber&hellip;</p>
+    <button id="startBtn" disabled>Start</button>
+    <p class="dim small">Chill exploration. Orbit, land, walk, ride. F1 for controls.</p>
+  </div>
+</div>
+<div id="fade"></div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

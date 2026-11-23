@@ -3,7 +3,8 @@
 A chill patched-conics flight prototype (three.js r160, no build step).
 Fly the carrier from low Halcyon orbit to the moon Pell, undock the lander, land on a marked ore site,
 drill and refine propellant, lift off and dock again. A second, much smaller moon, Wren, orbits farther out
-(same assists work there, objectives stay Pell-specific). Maneuver nodes and targeted planners are described below.
+(same assists work there, objectives stay Pell-specific). Wren is a pale ice moon split by a glowing rift, with erupting cryo-geysers,
+a faint debris ring and one thing nobody has listed yet. Maneuver nodes and targeted planners are described below.
 
 ## Run
 
@@ -29,7 +30,7 @@ Open http://localhost:8000/ in a desktop browser with WebGL2. three.js is loaded
 | M | map view (Tab cycles focus: vessel / Halcyon / Pell / Wren) |
 | Mouse drag / wheel | orbit camera / zoom (flight and map) |
 | U | undock lander (saves a revert point) |
-| H | transfer assist (any vessel in Halcyon orbit): plans a node to the target body and executes it |
+| H | transfer assist: plans a node to the target body (Pell, Wren, or Halcyon when in a moon orbit) and executes it |
 | C | circularize at next apsis |
 | L | landing assist (lander, at Pell or Wren: the selected ore site of that moon, else the nearest-wait beacon; suicide burn) |
 | B | ascent assist (lander, Pell or Wren; times launch to meet the carrier's orbit, then circularizes) |
@@ -47,7 +48,8 @@ Open http://localhost:8000/ in a desktop browser with WebGL2. three.js is loaded
 | `\` | cycle the node step: 0.1 / 1 / 10 / 100 m/s |
 | Enter | execute the node (warps to half the burn before it, burns, removes it) |
 | Delete | delete the node |
-| `` ` `` / `/` | cycle the target body (Pell / Wren) / the target ore site on it (none = automatic) |
+| `` ` `` / `/` | cycle the target body (Pell / Wren / Halcyon) / the landing target on it (none = automatic) |
+| Right-click (map) | menu for what is under the cursor: body (set target, focus camera), ore beacon or the Spire marker (set landing target), bare moon surface (landing target here). Esc or a left-click elsewhere closes it |
 | Backspace | cancel assist |
 | F5 / F9 | quicksave / quickload |
 | P | pause |
@@ -56,7 +58,8 @@ Open http://localhost:8000/ in a desktop browser with WebGL2. three.js is loaded
 The Maneuver panel (right, under the flight data) shows the target body and site, the first node (time, dv and its
 prograde/normal/radial parts, estimated burn time, orbit or encounter after the node) and has buttons for Plan xfer
 (transfer node to the target moon: periapsis target 55 km at Pell, 15 km at Wren), Circ Ap / Circ Pe (circularization
-nodes), Exec and Del. C still circularizes immediately. The map draws the post-node trajectory in magenta with a node
+nodes), Exec and Del. C still circularizes immediately. Transfers work from Halcyon orbit to a moon, between the moons, and from a moon back to Halcyon
+(120 km periapsis); moon-to-moon waits for the phasing window, which can be a day or more away (the message says how long, warp is safe). The map draws the post-node trajectory in magenta with a node
 marker, its Ap/Pe, and the encounter. Warp is capped before an unexecuted node's burn.
 
 Auto-dock: within 50 m and under 2 m/s relative speed. Crash: impact over 5 m/s, more than 3.5 m/s sideways,

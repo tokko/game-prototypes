@@ -22,8 +22,17 @@ export class Input {
     addEventListener('keyup', (e) => { this.keys.delete(e.code); });
     addEventListener('blur', () => this.keys.clear());
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    canvas.addEventListener('pointerdown', (e) => { this.drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
-    canvas.addEventListener('pointerup', (e) => { this.drag = null; canvas.releasePointerCapture(e.pointerId); });
+    canvas.addEventListener('pointerdown', (e) => {
+      this.drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
+      canvas.setPointerCapture(e.pointerId);
+      this.on('menu-close'); // a click elsewhere closes the map context menu
+    });
+    canvas.addEventListener('pointerup', (e) => {
+      const d = this.drag;
+      this.drag = null; canvas.releasePointerCapture(e.pointerId);
+      // right-click without a drag (a few pixels of slack) opens the map context menu; right-drag still orbits the camera
+      if (e.button === 2 && d && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 5) this.on('context', { x: e.clientX, y: e.clientY });
+    });
     canvas.addEventListener('pointermove', (e) => {
       if (!this.drag) return;
       const c = this.cam;
@@ -43,7 +52,8 @@ export class Input {
   press(e) {
     const k = e.code;
     const a = (n, arg) => this.on(n, arg);
-    if (k === 'KeyT') a('sas-toggle');
+    if (k === 'Escape') a('menu-close');
+    else if (k === 'KeyT') a('sas-toggle');
     else if (k.startsWith('Digit') && +k.slice(5) >= 1 && +k.slice(5) <= 9) a('sas-mode', SAS_MODES[+k.slice(5) - 1]);
     else if (k === 'Digit0') a('sas-mode', 'maneuver');
     // maneuver nodes (every letter key is taken, so these live on punctuation / navigation keys)
