@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Amber Field</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="hud">
+  <div id="top-center">
+    <div id="strength">
+      <canvas id="flag-red" width="60" height="72"></canvas>
+      <div id="balance"><div id="bal-red"></div><div id="bal-blue"></div></div>
+      <canvas id="flag-blue" width="60" height="72"></canvas>
+    </div>
+    <div id="bal-text">
+      <span id="str-red">0</span>
+      <div id="plaque" class="orn"><span id="timer">00:00</span></div>
+      <span id="str-blue">0</span>
+    </div>
+    <div id="messages"></div>
+  </div>
+
+  <div id="objectives" class="panel">
+    <div class="obj-head"><canvas id="obj-emblem" width="48" height="48"></canvas><h3>Primary Objectives</h3></div>
+    <ul>
+      <li id="obj-village"><span class="box"></span>Take and hold the village</li>
+      <li id="obj-rout"><span class="box"></span>Rout the enemy army</li>
+    </ul>
+    <div class="obj-head sec"><h3>Secondary Objectives</h3></div>
+    <ul>
+      <li id="obj-guns"><span class="box"></span>Silence the enemy guns</li>
+    </ul>
+    <div id="obj-hint"></div>
+  </div>
+
+  <div id="minimap-wrap" class="panel"><canvas id="minimap" width="200" height="200"></canvas></div>
+  <button id="help-btn" class="rbtn" data-tip="Controls">?</button>
+  <div id="help" class="panel">
+    <b>Controls</b><br>
+    LMB select / box / dbl-click type<br>
+    RMB move, drag = formation line<br>
+    RMB on enemy = attack<br>
+    WASD / arrows / edge pan &middot; Wheel zoom<br>
+    Q/E or MMB rotate<br>
+    Space/H halt &middot; F fire &middot; R run<br>
+    T tight &middot; L loose &middot; X attack nearest<br>
+    K detach / recall light company<br>
+    Ctrl+1-9 group &middot; P pause
+  </div>
+
+  <div id="general" class="panel">
+    <div id="gen-main">
+      <canvas id="portrait" width="200" height="236"></canvas>
+      <div id="gen-name">The General</div>
+    </div>
+    <div id="gen-btns">
+      <button id="g-all" class="rbtn sm" data-tip="Select all regiments (Ctrl+A)"><canvas width="44" height="44"></canvas></button>
+      <button id="g-pause" class="rbtn sm" data-tip="Pause / resume (P)"><canvas width="44" height="44"></canvas></button>
+      <button id="g-speed" class="rbtn sm" data-tip="Game speed (+ / -)"><canvas width="44" height="44"></canvas></button>
+    </div>
+  </div>
+
+  <div id="cards"></div>
+
+  <div id="orders" class="panel">
+    <button id="o-halt" class="rbtn" data-tip="Halt (Space / H)"><canvas width="64" height="64"></canvas></button>
+    <button id="o-fire" class="rbtn" data-tip="Fire at will / hold fire (F)"><canvas width="64" height="64"></canvas></button>
+    <button id="o-run" class="rbtn" data-tip="Run / charge (R)"><canvas width="64" height="64"></canvas></button>
+    <button id="o-tight" class="rbtn" data-tip="Tight formation (T)"><canvas width="64" height="64"></canvas></button>
+    <button id="o-loose" class="rbtn" data-tip="Loose formation (L)"><canvas width="64" height="64"></canvas></button>
+    <button id="o-attack" class="rbtn" data-tip="Attack nearest enemy (X)"><canvas width="64" height="64"></canvas></button>
+    <button id="o-light" class="rbtn" data-tip="Detach / recall light company (K)"><canvas width="64" height="64"></canvas></button>
+  </div>
+
+  <div id="deploy" class="panel">
+    <div id="deploy-title">Deployment</div>
+    <div id="deploy-sub">Place your regiments inside the marked zone.<br>Right-click to move, right-drag to set a line.</div>
+    <button id="begin" class="gbtn" data-tip="Begin the battle (Enter)">Begin Battle</button>
+  </div>
+
+  <div id="selbox"></div>
+  <div id="banner"></div>
+  <div id="endscreen"><div class="panel"><h1 id="end-title"></h1><p id="end-text"></p><button id="end-btn" class="gbtn">Fight again</button></div></div>
+</div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
