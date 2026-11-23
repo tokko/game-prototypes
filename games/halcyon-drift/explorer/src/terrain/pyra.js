@@ -218,6 +218,7 @@ export function waterSurface(x, z, h) {
   for (let i = 0; i < CONES.length; i++) { const c = CONES[i]; if (Math.abs(u - c.u) < c.cr * 1.3 && Math.abs(v - c.v) < c.cr * 1.3 && h < c.lavaLvl) w = Math.max(w, c.lavaLvl); }
   return w;
 }
+export function waterDepth(x, z) { const h = heightAt(x, z); const w = waterSurface(x, z, h); return w > -1e8 ? Math.max(0, w - h) : 0; }      // depth of lava over the ground (the rover will not drive into it; ecology / sampling use it as 'wading')
 export function normalAt(x, z, e = 1.2, out = [0, 1, 0]) {
   const hx = heightAt(x + e, z) - heightAt(x - e, z), hz = heightAt(x, z + e) - heightAt(x, z - e);
   const inv = 1 / Math.sqrt(hx * hx + 4 * e * e + hz * hz);

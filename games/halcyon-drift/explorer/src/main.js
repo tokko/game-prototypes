@@ -20,8 +20,8 @@ import { COM_FLAT, initAero, quatFromFwdUp } from './aeroflight.js';
 import { setAtmosphere, clearAtmosphere, atmU, sunDirect, inscatter } from './atmo.js';
 import { Scatter } from './scatter.js';
 import * as MD from './models.js';
-import { loadAssets, GLB, buildBikeGLB, buildAstronautGLB, buildPlaneGLB, buildProspectorGLB, P_COM_V } from './glbmodels.js';
-import { roverInit, roverStep, roverRight, roverCenter, REACH, surveyUpdate, richnessAt, drillYield } from './rover.js';      // PROSPECTOR
+import { loadAssets, GLB, buildBikeGLB, buildAstronautGLB, buildPlaneGLB, buildProspectorGLB, P_COM_V, P_DOCK } from './glbmodels.js';
+import { roverInit, roverStep, roverRight, roverCenter, REACH, surveyUpdate, richnessAt, drillYield, tipSpotTilt, standSpotTilt } from './rover.js';      // PROSPECTOR
 import { BODIES, SUN, G0, parkRadius, POI_TYPES } from './destinations.js';
 import { sunDirF, giantDirF, moonDirF, ringNormalF, siteLonLat, fToWorld, enu, lonLatOfDir } from './frames.js';
 import { input, initInput } from './input.js';
@@ -31,7 +31,7 @@ import * as S from './system.js';
 import * as F from './flight.js';
 import { Player } from './player.js';
 import { Bike } from './bike.js';
-import { Particles, createPlume, createPlasma } from './fx.js';
+import { Particles, createPlume, createPlasma, createBeacon } from './fx.js';
 import { Discovery, inventory, sampleAt, refineInto } from './discovery.js';
 import { SystemMap, fmtUT } from './systemmap.js';
 import { bakeOrbitMap, BodyView } from './bodyview.js';
@@ -267,7 +267,7 @@ function placeModel(v, rel, qF) {
   else { m.group.quaternion.copy(qF); m.group.position.copy(rel); }
 }
 const QZ90 = new Q().setFromAxisAngle(new V3(0, 0, 1), -Math.PI / 2);
-const DOCK_P = new V3(0, 3.12, -1.55);      // PROSPECTOR dock_port in the rove-pose model frame
+const DOCK_P = P_DOCK;      // PROSPECTOR dock_port in the rove-pose model frame (read from the GLB anchors)
 function layoutOrbitScene() {
   const a = world.active;
   const ref = a.status === 'orbit' || a.docked ? (a.docked ? world.carrier : a) : world.carrier;
@@ -651,9 +651,18 @@ function handleOrbitMapWarp() {
 
 // surface flight ------------------------------------------------------
 const ctlF = { fwd: 0, strafe: 0, yaw: 0, climb: 0, dthr: 0, full: false, cut: false, run: false };
+let lzBeacon = null;
+function updateLzBeacon(v) {          // green beam over the chosen landing site (final descent diversion)
+  const s = v.surf, on = !!(s.site && !s.landed);
+  if (!lzBeacon) { if (!on) return; lzBeacon = createBeacon(0x6dff9a, 140); sceneS.add(lzBeacon); }
+  lzBeacon.visible = on; if (!on) return;
+  lzBeacon.position.set(s.site.x, terrain.h(s.site.x, s.site.z), s.site.z);
+  lzBeacon.material.uniforms.uK.value = 1; lzBeacon.material.uniforms.uTime.value = G.time;
+}
 function updateFlight(dt) {
   const v = G.sv, s = v.surf;
   const free = !G.uiOpen;
+  updateLzBeacon(v);
   syncRover(v);
   const roverOn = v.kind === 'lander' && v.model.rover && v.stance === 'flat' && !!v.rv;      // PROSPECTOR: six-wheel drive mode
   ctlF.fwd = free ? (input.down('KeyW') ? 1 : 0) - (input.down('KeyS') ? 1 : 0) : 0;
@@ -692,7 +701,8 @@ function updateFlight(dt) {
   const dtE = dt * wp, steps = Math.max(1, Math.round(dtE / (1 / (wp > 1 ? 60 : 120))));
   const envF = surfEnv();
   if (roverOn) driveRover(v, dt, free, envF);          // PROSPECTOR
-  else for (let i = 0; i < steps; i++) F.stepFlight(v, ctlF, dtE / steps, envF);
+  else { s.events.length = 0; for (let i = 0; i < steps; i++) F.stepFlight(v, ctlF, dtE / steps, envF); }
+  tickWorkers(dt, s.p);          // drilling / refining also progress from the cab (they used to wait for the crew to step outside)
   world.advance(dt, null);
   for (const e of s.events) flightEvent(v, e);
   // other surface craft just rest; power / heat for plane and Prospector systems
@@ -715,6 +725,7 @@ function driveRover(v, dt, free, envF) {
   const n = 2; for (let i = 0; i < n; i++) roverStep(v, _rctl, dt / n, envF);
   for (const e of s.events) {
     if (e === 'rolled') say('The rover has rolled over on the slope! Press R to right it', 'warn', true);
+    else if (e === 'steepahead') { if (G.time - (G.lavaHint || -9) > 3) { G.lavaHint = G.time; say('Too steep ahead: the stability control stops the rover (turn, or go round)', 'warn'); } }
     else if (e === 'lava') { if (G.time - (G.lavaHint || -9) > 3) { G.lavaHint = G.time; say('Lava ahead: the rover will not drive into it', 'warn'); } }
     else if (e === 'deepwater') { if (G.time - (G.lavaHint || -9) > 3) { G.lavaHint = G.time; say('Too deep for the wheels', 'warn'); } }
   }
@@ -744,7 +755,7 @@ function craftSystems(o, dt) {
   if (o.kind === 'lander') {
     const rv = o.rv, flat = rv && o.stance === 'flat';
     if (flat) {
-      const sp = Math.abs(rv.speed); _sysX.driveLoad = 0.12 * sp; _sysX.driveHeat = 0.05 * sp;
+      const sp = Math.abs(rv.speed); _sysX.driveLoad = 0.06 * sp; _sysX.driveHeat = 0.05 * sp;
       const env = surfEnv(); if (env.heatAt) _sysX.aeroHeat = env.heatAt(rv.cx, rv.cz) * 14;          // radiant heat from lava
       if (sp > 4 && (o.depT.panels || o.depT.radiators)) { o.depT.panels = 0; o.depT.radiators = 0; say('Panels and radiators retracted for driving', 'warn'); }
     }
@@ -760,6 +771,8 @@ function flightEvent(v, e) {
   if (e === 'landed') { say(`Touchdown (${(v.surf.aero ? (v.surf.landSink ?? 0) : (v.surf.landSpeed ?? 0)).toFixed(1)} m/s${v.surf.aero ? ' sink' : ''}). ${v.name} is safe`, 'ok', true); for (let i = 0; i < 40; i++) dustBurst(v.surf.p, 8, 3); }
   else if (e === 'hard') { say(`Hard landing (${(v.surf.hardSpeed ?? 0).toFixed(1)} m/s): hull damaged`, 'warn', true); }
   else if (e === 'steep') say(`Ground too steep to stand on (${(v.surf.tilt * 57.3).toFixed(0)} deg): lifting off. Find flatter ground and land again (L)`, 'warn', true);
+  else if (e === 'divert') say(`Landing site found ${(v.surf.site.d).toFixed(0)} m away: diverting (marked LZ on the compass)`, 'ok', true);
+  else if (e === 'nosite') say('No flat, dry ground within reach: landing where the track ends (find a patch yourself: Shift climbs, L lands)', 'warn', true);
   else if (e === 'liftoff') say(v.surf.aero ? 'Airborne' : 'Liftoff', 'info');
   else if (e === 'waterwarn') say('Water below: this craft cannot land on water. Climb or divert to the meadow', 'warn');
   else if (e === 'water' || e === 'splashed') say('Splashdown avoided: the autopilot pulled you out of the water (the craft cannot land on water)', 'warn', true);
@@ -777,10 +790,11 @@ function launchToOrbit(v) {
 }
 function tipRover(v) {      // PROSPECTOR: legs unfold, hull pivots down onto the six wheels; and back up for a vertical launch
   if (!v.surf.landed || v.stance === 'tipping') return;
-  if (v.stance === 'vertical') { v.tipT = 1; v.depT.panels = 0; v.depT.radiators = 0; say('Wheel legs unfolding: tipping the rover down onto its wheels...', 'info'); return; }
+  if (v.stance === 'vertical') { const tt = tipSpotTilt(v, surfEnv()); if (tt > 0.5) return say(`Ground too steep to tip down here (${(tt * 57.3).toFixed(0)} deg under the wheels): the rover would roll over. Lift off (Shift) and land on flatter ground (L)`, 'warn', true); v.tipT = 1; v.depT.panels = 0; v.depT.radiators = 0; say('Wheel legs unfolding: tipping the rover down onto its wheels...', 'info'); return; }
   const rv = v.rv; if (rv && (Math.abs(rv.speed) > 0.5 || rv.flipT)) return say(rv.flipT ? 'Right the rover first (R)' : 'Stop the rover before standing it up', 'warn');
   if (v.dep.drill > 0.05 || v.drilling) { v.depT.drill = 0; return say('Drill retracting: press T again', 'warn'); }
   if (v.dep.panels > 0.05 || v.dep.radiators > 0.05) { v.depT.panels = 0; v.depT.radiators = 0; return say('Panels and radiators retracting: press T again', 'warn'); }
+  { const st = standSpotTilt(v, surfEnv()); if (st > 0.4) return say(`Slope too steep to stand up here (${(st * 57.3).toFixed(0)} deg under the tail pads): drive to flatter ground first`, 'warn', true); }
   v.sensorManual = false; v.depT.sensor = 0; v.tipT = 0; say('Standing the rover up for vertical launch (nose up, engines down)...', 'info');
 }
 function tipPlane(v) {
@@ -1206,6 +1220,7 @@ function updateHud(dt) {
     hud.bar('b-skin', G.suit.t, true, `SUIT ${suitCelsius(G.suit.t)} C`);
     if (G.suit.t > 0.55) flags.push(G.suit.t > 0.85 ? 'SUIT OVERHEATING' : 'HEAT WARNING');
   }
+  { const lz = mode === 'flight' && G.sv.surf.site; if (lz) flags.push(`LZ ${fmtM(lz.dist || lz.d)}`); }
   hud.flags(flags);
   hud.prompts(G.uiOpen ? [] : prompts.slice(0, 2));
   hud.inv(`Ice ${inventory.ice.toFixed(0)} kg   Regolith ${inventory.regolith.toFixed(0)} kg   ` + (eco ? `Spores ${inventory.spores || 0}   Species ${eco.known.size}/${SURVEY_TOTAL}   ` : '') + `Discoveries ${disc.journal.filter((e) => e.type !== 'bio').length}`);
@@ -1215,7 +1230,9 @@ function updateHud(dt) {
     const heading = Math.atan2(-Math.sin(G.camYaw || 0) * -1, 1) * 0;
     const cam = gfx.camera; const fwd = new V3(0, 0, -1).applyQuaternion(cam.quaternion); const hd = Math.atan2(fwd.x, -fwd.z);
     const px = mode === 'flight' ? G.sv.surf.p : mode === 'onfoot' ? player.p : mode === 'skiff' ? skiff.p : bike.p;
-    hud.compassDraw(hd, disc.compassList(px.x, px.z, 9000));
+    const pois = disc.compassList(px.x, px.z, 9000);
+    const lz = mode === 'flight' && G.sv.surf.site; if (lz) pois.push({ bearing: Math.atan2(lz.x - px.x, -(lz.z - px.z)), label: 'LZ', color: '#6dff9a', found: true, dist: lz.dist || 0 });      // landing-site marker
+    hud.compassDraw(hd, pois);
   } else hud.compassDraw(0, []);
   document.getElementById('compass').style.opacity = mode === 'orbit' ? 0.0 : 1;
 }

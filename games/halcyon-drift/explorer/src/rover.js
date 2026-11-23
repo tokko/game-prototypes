@@ -13,10 +13,23 @@ const V3 = THREE.Vector3;
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 export const REACH = 4.8;                 // pad reference to rover centre
-const TIP_LIMIT = 0.63;                   // ground tilt (rad, about 36 degrees) beyond which the rover rolls over
+const TIP_LIMIT = 0.8;                    // smoothed ground tilt (rad, about 46 degrees) beyond which the rover rolls over
 const _n = new V3(), _q = new THREE.Quaternion(), _z = new V3(0, 0, 1), _qr = new THREE.Quaternion();
 export const roverCenter = (v, out = new V3()) => { const rv = v.rv; return out.set(rv.cx, rv.cy, rv.cz); };
 
+/** ground tilt (rad) under the six wheels if the landed (vertical) Prospector tipped down here: used to refuse a tip-down onto ground it would roll over on */
+export function tipSpotTilt(v, env) {
+  const s = v.surf, h = s.heading, cx = s.p.x + Math.sin(h) * REACH, cz = s.p.z - Math.cos(h) * REACH;
+  return groundFit({ cx, cz }, h, env).tilt;
+}
+/** slope (rad) of the ground under the tail pads if the rover stood up here (pad reference point = surf.p): used to refuse a stand-up it could not launch from */
+export function standSpotTilt(v, env) {
+  const s = v.surf, r = 3.2; let sxy = 0, szy = 0, sy = 0; const ys = [];
+  const pts = [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]];
+  for (const [dx, dz] of pts) { const y = env.h(s.p.x + dx, s.p.z + dz); ys.push(y); sy += y; }
+  const c = sy / 5; const a = ((ys[1] - ys[2]) / (2 * r)), b = ((ys[3] - ys[4]) / (2 * r));
+  return Math.atan(Math.hypot(a, b));
+}
 /** switch a landed, fully tipped Prospector to rover control (centre ahead of the pad reference) */
 export function roverInit(v, env) {
   const s = v.surf, h = s.heading;
@@ -31,9 +44,11 @@ const wheelPoint = (rv, h, i, out) => {            // world xz of wheel i (rover
 };
 /** ground plane under the six wheels: returns {cy (height at the centre), a (slope across), b (slope along aft), tilt} */
 function groundFit(rv, h, env) {
-  let sy = 0, sxy = 0, szy = 0, sxx = 0, szz = 0; const p = new V3();
-  for (let i = 0; i < 6; i++) { wheelPoint(rv, h, i, p); const y = env.h(p.x, p.z); const [lx, lz] = P_WHEELS[i]; sy += y; sxy += lx * y; szy += lz * y; sxx += lx * lx; szz += lz * lz; }
-  const a = sxy / sxx, b = szy / szz, cy = sy / 6;
+  let sy = 0, sxy = 0, szy = 0, sxx = 0, szz = 0; const p = new V3(), ys = [0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < 6; i++) { wheelPoint(rv, h, i, p); ys[i] = env.h(p.x, p.z); sy += ys[i]; }
+  const cy = sy / 6;                                        // least squares about the centroid (the wheel layout is not exactly symmetric in z, so raw sums would leak the absolute height into the slope)
+  for (let i = 0; i < 6; i++) { const [lx, lz] = P_WHEELS[i], dy = ys[i] - cy, dz = lz + 0.0333; sxy += lx * dy; szy += dz * dy; sxx += lx * lx; szz += dz * dz; }
+  const a = sxy / sxx, b = szy / szz;
   return { cy, a, b, tilt: Math.atan(Math.hypot(a, b)) };
 }
 
@@ -45,17 +60,18 @@ export function roverStep(v, ctl, dt, env) {
   const gf = groundFit(rv, h, env);
   // ---- attitude from the wheel plane (heavy: slow follow); body height follows the plane
   _n.set(-gf.a * rx + gf.b * fx, 1, -gf.a * rz + gf.b * fz).normalize();      // a: dy per metre to the right, b: dy per metre aft (aft = -forward)
-  rv.n.lerp(_n, Math.min(1, dt * 5)).normalize(); rv.tilt = gf.tilt;
+  rv.n.lerp(_n, Math.min(1, dt * 5)).normalize(); rv.tilt = gf.tilt; rv.tiltS = (rv.tiltS ?? gf.tilt) + (gf.tilt - (rv.tiltS ?? gf.tilt)) * Math.min(1, dt * 2.5);      // smoothed: a yaw on a steep edge must not roll it for one frame
   const dyTarget = gf.cy; rv.bump = (dyTarget - rv.cy);
   rv.cy += (dyTarget - rv.cy) * Math.min(1, dt * 10);
   // ---- tip-over / self-right
-  if (rv.flipT > 0.5 || (gf.tilt > TIP_LIMIT && !rv.flipT)) { if (!rv.flipT) { rv.flipT = 1; rv.flipDir = (gf.a * rx > 0 ? -1 : 1); rv.speed = 0; s.events.push('rolled'); } }
+  if (rv.flipT > 0.5 || (rv.tiltS > TIP_LIMIT && !rv.flipT)) { if (!rv.flipT) { rv.flipT = 1; rv.flipDir = (gf.a * rx > 0 ? -1 : 1); rv.speed = 0; s.events.push('rolled'); } }
   rv.flip += ((rv.flipT ? 1 : 0) - rv.flip) * Math.min(1, dt * 2.6);
   if (rv.flipT) { rv.speed *= Math.pow(0.05, dt); ctl = { fwd: 0, steer: 0, brake: 1 }; }
   // ---- drive
   const grip = clamp(env.gripAt ? env.gripAt(rv.cx, rv.cz) : 1, 0.08, 1.2);
   const battOk = v.sysBatt > 0.05;
-  const vmax = LANDER.driveMax * (battOk ? 1 : 0.15) * (1 - 0.25 * (1 - grip));
+  // stability control: the drive eases off as the ground under the wheels steepens (the plane fit sees the slope a few metres before the body tips)
+  const vmax = LANDER.driveMax * (battOk ? 1 : 0.15) * (1 - 0.25 * (1 - grip)) * (1 - 0.8 * sstep(0.34, 0.6, gf.tilt));
   let tv = ctl.fwd > 0 ? ctl.fwd * vmax : ctl.fwd * vmax * 0.35;
   // along-heading ground gradient: dh per metre in the forward direction (height rises forward when positive)
   const dhds = -(gf.b);                                     // b is dy per metre aft, so forward gradient is -b
@@ -79,6 +95,9 @@ export function roverStep(v, ctl, dt, env) {
   const vx = fx2 * sp + rx2 * rv.vlat, vz = fz2 * sp + rz2 * rv.vlat;
   // move with blocking: water, lava, boulders / spires
   let nx = rv.cx + vx * dt, nz = rv.cz + vz * dt;
+  if (!rv.flipT && Math.abs(sp) < 5.5 && Math.hypot(vx, vz) > 0.05 && groundFit({ cx: nx, cz: nz }, hn, env).tilt > 0.66) {      // stability control: at crawling speed the drive will not push into ground that would roll it
+    if (gf.tilt < 0.66 || groundFit({ cx: nx, cz: nz }, hn, env).tilt > gf.tilt) { nx = rv.cx; nz = rv.cz; sp = 0; rv.vlat = 0; s.events.push('steepahead'); }
+  }
   const wd = env.waterDepth ? env.waterDepth(nx, nz) : 0;
   const lava = !!env.heatAt;
   rv.wet = wd;

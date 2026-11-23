@@ -17,7 +17,7 @@ export const LANDER = {
   dry: 4800, fuelMax: 1520, oxMax: 5480,        // kg; O/F 3.6 -> 7000 kg propellant
   thrust: 45000, isp: 340, mixture: 3.6,         // N, s
   cargoMax: 2500,                                // kg hydrogen cargo for the carrier
-  battery: 80, panelPower: 10, radiatorRejection: 10, heatCap: 90,      // rover systems (see Vessel.stepSystems)
+  battery: 100, panelPower: 12, radiatorRejection: 10, heatCap: 90,      // rover systems (see Vessel.stepSystems)
   driveMax: 11, driveAccel: 1.5,                  // m/s top speed and acceleration of the six-wheel drive
 };
 // Albatross: spaceplane. Three engine modes (see PLANE.modes), VTOL lift nozzles, cargo bay for the dirt bike,

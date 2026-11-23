@@ -16,7 +16,7 @@ Open `http://localhost:8791/` in a Chromium-based browser (WebGL2, internet acce
 
 ## Flow
 
-1. Title -> **orbit view** at Kestrel (40 km). The carrier *Wayfarer* holds the lander *Heron* and the spaceplane *Albatross*.
+1. Title -> **orbit view** at Kestrel (40 km). The carrier *Wayfarer* holds the lander-rover *Prospector* and the spaceplane *Albatross*.
 2. `U` undock the spaceplane, `G` begin descent (retrograde burn, powered descent, handover to the surface scene at 14 km).
 3. Land tail-first (auto-land `L`), `T` tip the plane to horizontal, `Y` ramp, `B` bike, `E` ride. Or `E` out and walk.
 4. Sample ice/regolith (`G`), scan (`F`), refine at a craft (`R`), `O` launch to orbit, `C` dock, `M` plan transfers to any of the six worlds.
@@ -27,7 +27,7 @@ Open `http://localhost:8791/` in a Chromium-based browser (WebGL2, internet acce
 |---|---|
 | Anywhere | `M` system map, `J` journal, `F1`/`H` help, `Esc` close overlay / release mouse |
 | Orbit view | `W/S` pitch, `A/D` yaw, `Q/E` roll, `Shift/Ctrl` throttle, `Z` full, `X` cut, `1` pro, `2` retro, `3` radial, `4` free, `5` node; `,` `.` warp, `/` 1x; `U` undock plane, `I` undock lander, `C` dock (< 12 km), `Tab` switch craft, `G` begin/cancel descent, `N` plane engine mode, `P` panels, `K` radiators; mouse drag + wheel = camera |
-| Hover flight (Heron, Albatross tail-down) | `W/S/A/D` move, `Q/E` turn, `Shift/Ctrl` climb (assist) or throttle (manual), `Space` assist on/off, `L` auto-land, `O` launch to orbit, `E` leave craft (landed) |
+| Hover flight (Prospector, Albatross tail-down) | `W/S/A/D` move, `Q/E` turn, `Shift/Ctrl` climb (assist) or throttle (manual), `Space` assist on/off, `L` auto-land, `O` launch to orbit, `E` leave craft (landed) |
 | Spaceplane on the ground | `T` tip down / stand up, `Y` cargo ramp, `B` deploy/stow bike, `P` solar panels, `K` radiators, `N` engine mode, `V` drill, `R` mini-ISRU refine |
 | On foot | `WASD`, `Shift` run, `Space` jump / hold for jetpack, mouse look (click to capture), wheel zoom, `E` enter craft or ride bike, `G` sample, `F` scan, `R` refine, `B/T/Y/V/P/K` act on the nearby plane |
 | Bike | `W` throttle, `S` brake/reverse, `A/D` steer, `Shift` boost, `Q` wheelie, `Space` brake; in the air `W/S` pitch, `A/D` roll, `E/Q` yaw; `R` reset upright, `E` dismount |
@@ -59,7 +59,7 @@ A future automatic slingshot planner would reuse `predict` / `closestApproach` a
 | Craft | Dry | Propellant | Engine(s) | Thrust | Isp | dv (full) |
 |---|---|---|---|---|---|---|
 | Wayfarer carrier (nuclear-thermal) | 42,000 kg | 70,000 kg LH2 | NTR | 300 kN | 900 s | 5,408 m/s with both craft docked (152.8 t wet, 2.0 m/s2); 8,657 m/s alone |
-| Heron lander (methalox, O/F 3.6) | 4,800 kg | 1,520 kg CH4 + 5,480 kg LOX | 1 throttleable | 45 kN | 340 s | 2,994 m/s (11.8 t wet, TWR 3.2 on Kestrel) |
+| Prospector survey rover / lander (methalox, O/F 3.6; was the Heron) | 4,800 kg | 1,520 kg CH4 + 5,480 kg LOX | 1 throttleable | 45 kN | 340 s | 2,994 m/s (11.8 t wet, TWR 3.2 on Kestrel) |
 | Albatross spaceplane, rocket mode | 9,000 kg (incl. 300 kg bike, mini-ISRU) | 4,300 kg CH4 + 13,500 kg LOX | closed-cycle | 140 kN | 360 s | 3,359 m/s rocket only (29.0 t wet, TWR 4.1 on Kestrel); the surplus methane feeds the jets |
 | Albatross, nuclear mode | same | 2,200 kg LH2 | small NTR | 25 kN | 850 s | 929 m/s (1,823 m/s once the rocket propellant is spent); TWR 1.0 so orbit only |
 | Albatross, air-breathing jet | same | CH4 only | jet | 90 kN at sea level, falls with density^0.8, dies at Mach 6.5 | 3,500 s | ~3,640 m/s equivalent, atmosphere only (auto-selected there) |
@@ -96,7 +96,7 @@ The spaceplane's nuclear mode does Kestrel <-> Glaciera alone (planned 567 m/s v
 
 ### Landing + ascent per body (estimate, m/s)
 
-Kestrel 1,742 and Glaciera 1,856 (land + ascent, whole round trip) are within both Heron (2,994) and Albatross rocket mode (3,359). Verdant Prime 4,949, Pyra 4,491, Aethel 3,704 and Nyth 3,553 exceed what a
+Kestrel 1,742 and Glaciera 1,856 (land + ascent, whole round trip) are within both Prospector (2,994) and Albatross rocket mode (3,359). Verdant Prime 4,949, Pyra 4,491, Aethel 3,704 and Nyth 3,553 exceed what a
 pure rocket round trip allows, but the return leg alone is what matters once the craft has been refuelled on the surface (ISRU), so the ascent budget below is computed from a FULL surface refuel (`src/ascent.js`, also shown in the map's body info).
 
 ### Can every destination be left to orbit after a full surface refuel?
@@ -105,7 +105,7 @@ Airless worlds: vertical launch (nose up, engines down at the ground, thrusting 
 climbs on air-breathing jets (Isp 3,500 s, thrust falling with air density; in the flown model they top out near Mach 2.1 at 9 to 12 km and add about 750 m/s), then switches to the closed-cycle rocket to circularise. Heron is a blunt, draggy rocket, no wings, rocket ascent only.
 Need = circular speed + gravity loss (0.55 g x burn time) + drag loss on atmospheric worlds + 20 m/s margin.
 
-| Body | Heron need / capacity (m/s) | Heron reaches orbit | Albatross ascent | Albatross reaches orbit |
+| Body | Prospector need / capacity (m/s) | Prospector reaches orbit | Albatross ascent | Albatross reaches orbit |
 |---|---|---|---|---|
 | Kestrel (airless) | 663 / 2,999 | yes (+352%) | vertical launch, 648 / 3,359 m/s | yes (+418%) |
 | Glaciera (airless) | 736 / 2,999 | yes (+307%) | vertical launch, 721 / 3,359 m/s | yes (+366%) |
@@ -124,12 +124,12 @@ makes the gear tip it down to horizontal (wheels deploy first, tail legs fold, a
 Retractable solar panels (fold-out, `P`) charge a battery; the mini drill (`V`) and mini-ISRU (`R`) draw power and make heat that the swing-out radiators (`K`) reject. Overheating or an empty battery stops those systems (never the player).
 ### Drag and reentry heating (all craft)
 
-`aero.js` has one drag + skin-temperature model used in both scenes, so the orbit-to-surface handover is continuous: ballistic coefficient beta (Heron 240 kg/m2, blunt and draggy with no lift;
+`aero.js` has one drag + skin-temperature model used in both scenes, so the orbit-to-surface handover is continuous: ballistic coefficient beta (Prospector, formerly the Heron, 240 kg/m2, blunt and draggy with no lift;
 Albatross 640, streamlined; Wayfarer 1,400) gives drag decel = rho v^2 / (2 beta), so each craft has a terminal velocity sqrt(2 g beta / rho). Stagnation heat flux is 1.7e-4 sqrt(rho / nose radius) v^3 (W/m2), the skin
 relaxes towards its radiative equilibrium temperature (0.85 emissivity) with a 5 to 12 s thermal lag (game-scaled; real entries last minutes). A bright plasma shell with a stretched wake hugs the leading side from about 800 K, and the HUD shows SKIN temperature and percentage of the limit (Heron 2,300 K, Albatross 1,900 K, Wayfarer 1,600 K).
 It is forgiving: a warning at 80% of the limit, then slowly degrading damage above it (up to 45% thrust loss), never an instant kill; panels and radiators are force-retracted as soon as the airstream glows or dynamic pressure is high.
 The orbit simulator switches to stepped dynamics at the atmospheric interface of any atmospheric body (the rails event fires at the top of the shell). Kestrel itself is airless, so there is no atmosphere at the default site.
-Verified by temporarily giving Kestrel an atmosphere from the browser console (no new test world): a Heron entering at 2.6 km/s decelerates from 2,600 m/s to terminal speed, crosses the 14 km hand-over into the surface scene with speed and skin temperature continuous, at 57 fps.
+Verified by temporarily giving Kestrel an atmosphere from the browser console (no new test world): a lander entering at 2.6 km/s decelerates from 2,600 m/s to terminal speed, crosses the 14 km hand-over into the surface scene with speed and skin temperature continuous, at 57 fps.
 Wing lift/stall and jet thrust falloff in `aero.js` are used by the ascent budget and engine selection; the surface scene has no wing-borne flight yet.
 
 ## Authored models (GLB)
@@ -163,7 +163,7 @@ Reusable systems, each driven by a per-world recipe module plus destinations.js 
 - Sky giant: a pale teal/cream temperate giant with longitude-sheared festoons, many soft bands and a cream storm oval (`sky.js` style 1 plus `giantPal` in `destinations.js`), hazed by the atmosphere.
 - Orbit view (`bodyview.js`): continents, oceans, deserts, mountain and polar-cap tones from low-frequency noise, a slowly rotating banded cloud deck with soft shadows on the surface, an ocean sun glint and the scattering rim.
 - A bloom pre-pass sanitizes NaN/Inf texels (a rogue texel could smear into black blocks through the bloom chain).
-- The plane's "Hover assist" label is now "Descent hold" (Albatross, tail-down landings) / "Stability assist" (winged flight); the Heron keeps "Hover assist".
+- The plane's "Hover assist" label is now "Descent hold" (Albatross, tail-down landings) / "Stability assist" (winged flight); the Prospector keeps "Hover assist".
 
 ### Flora / fauna kit (assets/models/verdant/*.glb)
 `vegetation.js` and `ecology.js` now render the authored Blender kit instead of the procedural plants and animals (`flora.js` and the segmented creature builders remain only as a per-species fallback when a file fails to load). All eight files are preloaded behind the title screen.
@@ -209,6 +209,18 @@ Recipes (`src/terrain/<world>.js`) registered in `RECIPES` in `main.js`; each wo
 - Shared systems touched by several worlds: `atmo.js` (per-world `scatter.tint` and `scatter.amb`), `terrain/terrain.js` (volcanic mode `uLush` 2, Nyth glow uniforms, Aethel gate hole and strata tint), `vegetation.js` (Pyra `floraLook`, Nyth `kit` styles, crown-blob far LOD), `bodyview.js` (Pyra lava veins and rim, Nyth night-side glow, Aethel pits), `main.js` (all hooks; world switches restore shadows, tint, exposure).
 - Debug hooks: `__game.teleport(mode, x, z, {world, craft, flat, alt})`, `__game.aethel` (skiffTo, enterInterior, ...), `__game.atmU`, `__game.suit`.
 - Merge notes: the three patches were merged with a three-way merge against the common base (line endings normalised to LF); conflicts were all additive (uniform declarations, RECIPES entries, POI text tables, per-world look hooks) and kept both sides.
+
+## Prospector survey rover (replaces the Heron)
+`assets/models/prospector.glb` (45.8k tris; needs `EXT_texture_webp`) is loaded through `glbmodels.js` (`buildProspectorGLB`) and keyed entirely by node and clip names (`art/rover/prospector_nodes.json`): `<name>_hinge` rigs, clips `legs_extend`, `panels_deploy`, `radiators_deploy`, `drill_deploy`, `sensor_raise`, anchors `plume_main_L/R`, `wheel_0..5`, `tail_pad_0..2`, `drill_tip`, `crew_exit`, `dock_port`. The contact geometry (wheel centres, wheel radius, tail pads, centre of mass, dock port) is read from the file's anchors at load time (`buildProspectorGLB`), so a re-export with moved wheels or pads needs no code change. If the file fails to load the procedural Heron model is used (same craft stats, no rover features). The craft stats are the Heron's (4,800 kg dry, 1,520 kg CH4 + 5,480 kg LOX, 45 kN, 340 s), so the ascent and planner reports are unchanged; `LANDER` also gained `battery`, `panelPower`, `radiatorRejection`, `heatCap` (the same power / heat model as the Albatross, `Vessel.stepSystems`) and `driveMax` / `driveAccel`.
+- **Orbit and docking:** `I` undocks, `C` docks (scripted approach). Docked it hangs in the rove pose with its roof ring (`dock_port`) against the carrier's lander port; free in orbit it is vertical (nose up, engines aft), everything stowed.
+- **Descent and landing:** tail-first powered descent on the main nozzles (`plume_main_L/R`), same guidance as before (`guideLand` with the final-approach cap), aero drag and reentry heating as the lander always had. It stands on the three tail pads on every world. A gentle touch on ground too steep to stand on (over about 29 degrees; rare now that the descent picks a site) no longer counts as a hard landing: it lifts off again and hands control back ("find flatter ground, L to land"). T refuses to tip it down where the wheel plane would be steeper than about 29 degrees.
+- **Landing-site search (all powered tail landings: the Prospector and the Albatross on airless worlds, auto-land `L` and the descent assist):** below 3 km above ground, `flight.js` (`findSite`, `siteOk`, `siteGuide`) searches outwards for the nearest patch that is flat enough to tip down on: plane-fit slope under 15 degrees over a 18 m (22 m for the plane) footprint, no pit or boulder (residual under 0.9 m), no water or lava, no hot ground (lava heat), no loaded colliders. The reach is what the sideways acceleration allows over a hover-long diversion (up to 5 km; roughly 1.5 to 5 km on Kestrel and Verdant). The horizontal guidance then flies to it (vertical thrust keeps priority, the sink speed is capped so the descent does not finish before the diversion), a green `LZ` pin appears on the compass with an `LZ <distance>` flag and a beam over the site, and it lands there. If nothing is found within reach it keeps the old behaviour (lands where the track ends) and warns once; the search repeats every 3 s while the reach shrinks with altitude.
+- **Tip down / stand up (`T`):** the six wheel legs unfold (`legs_extend`), then the hull pivots down about the lowest pad or wheel onto the wheels; `T` again stands it up (it asks the drill, panels and radiators to retract first) for a vertical launch (`O`, as the Heron).
+- **Drive (`rover.js`):** six-wheel heavy rover, 11 m/s top speed, slow torquey acceleration (1.5 m/s^2, tapering), skid steering limited by the track width, body height and attitude from a least-squares plane through the six wheel contact points (`wheel_N` x, z), wheels spin on their nodes. Slopes pull on it, grip (Glaciera `gripAt`) limits acceleration, braking and lateral slip, lava and deep water are not driven into, boulders and spires block it. Battery drains with speed and the mast; with a flat battery it crawls at 15%. It rolls over beyond about 46 degrees of ground tilt (the drive eases off from about 20 degrees, and at crawling speed a stability control refuses to push into ground steeper than about 38 degrees, so a rollover takes speed or a sudden drop) (it stays on its back until `R` rights it: the roll reverses and, if the spot is too steep, it moves to the nearest gentle ground). Lava radiates heat into the hull (radiators matter).
+- **Survey (the core loop):** the sensor mast (`sensor_raise`) rises by itself when driving (and stays up for 8 s), `Y` toggles it. The Ground Survey panel (top right) shows the local richness of the ground (0 to 100%, ice / regolith from `sampleAt`, a smooth field with a water-table or ice channel plus regolith variation) and an arrow towards the richest ground within 600 m, with the distance and the gain. `F` scans from the rover with a bigger radius (1.1 km, 150 m for species) than on foot (480 m, 60 m). Discoveries and species logging work as before.
+- **Drill and refine:** `V` when parked and upright: the drill mast swings down through the belly bay (`drill_deploy`, the bit touches the ground at `drill_tip`), then takes 9 s; the yield is `sampleAt` amount x (1 + 3.5 x richness at that spot) (the toast reports it). `R` refines through the ISRU (6 s, draws power and makes heat) when parked. `P` panels and `K` radiators; they fold away by themselves when driving fast (over 4 m/s), in flight, on reentry and while tipping. Drilling and refining now also progress from the cab (they used to wait until the crew stepped out). The spaceplane can drill too.
+- **Crew:** `E` exits at `crew_exit` (left flank) and enters again; the bike stays with the plane.
+- **Debug hooks:** `__game.teleport('flight', x, z, { craft: 'lander', flat: true, world })` starts it in the rove pose; `__game.rover` has the actions.
 
 ### Atmospheric ascent test (unbroken run)
 `explorer` was flown headless from the Verdant runway: `O` (takeoff and climb autopilot), jets to Mach 2.1, rocket, ascent hand-over to the orbit simulator and the orbit-scene ascent autopilot. This exposed two real problems that were fixed: the orbit-mode drag treated the plane as blunt (beta 640 kg/m2) even nose-first at Mach 3 (it now drops to a streamlined beta when the nose leads the velocity), and the tanks were too small for the real losses, so the Albatross now carries 4,300 kg CH4 and 13,500 kg LOX (was 2,100 / 7,560; the jet leg burns about 600 kg of methane). The rocket phase also climbs steeply (`ASCENT.zoomGamma` 0.8, orbit-scene `vzCap` 520 m/s) to leave the dense air early. `ascent.js` uses a flown jet leg of 750 m/s and multiplies the ideal atmospheric rocket dv by 1.85 (flown about 2,880 to 2,990 m/s vs 1,556 ideal).

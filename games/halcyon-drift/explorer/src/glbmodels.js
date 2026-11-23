@@ -173,11 +173,14 @@ export function buildPlaneGLB(gltf) {
 // Everything is keyed by node / clip names (assets/models/prospector.glb, art/rover/prospector_nodes.json): the model may be re-exported with
 // better parts as long as the names stay. Model frame: -Z forward, +Y up, origin on the ground under the rover in the rove stance (legs out).
 const P_CLIP = { legs: 'legs_extend', panels: 'panels_deploy', radiators: 'radiators_deploy', drill: 'drill_deploy', sensor: 'sensor_raise' };
-export const P_PAD_LIFT = 4.8;                   // vertical stance: rotate +90 deg about X and lift this far so the tail pads touch the ground
+// Contact geometry: defaults match prospector_nodes.json; buildProspectorGLB overwrites them in place from the file's own anchors (wheel_N, tail_pad_N, com_ref, dock_port),
+// so a re-export with moved wheels or pads is picked up without code changes.
+export let P_PAD_LIFT = 4.8;                   // vertical stance: rotate +90 deg about X and lift this far so the tail pads touch the ground
 export const P_WHEELS = [[-2.08, -3.1], [2.08, -3.1], [-2.08, -0.05], [2.08, -0.05], [-2.08, 3.0], [2.08, 3.0]];      // rove frame (x, z) of wheel_0..5: FL FR ML MR RL RR
-export const P_WHEEL_R = 0.65;
+export let P_WHEEL_R = 0.65;
 export const P_COM_V = new V3(0, 4.5, 1.6);      // centre of mass in the vertical-stance flight frame (com_ref)
-const P_PADS = [[0, 2.5, 4.8], [-0.9093, 0.925, 4.8], [0.9093, 0.925, 4.8]];       // tail_pad_0..2 in model coordinates (fallback when the nodes are missing)
+export const P_DOCK = new V3(0, 3.12, -1.55);      // dock_port in the rove-pose model frame
+const P_PADS = [[0, 2.5, 4.8], [-0.9093, 0.925, 4.8], [0.9093, 0.925, 4.8]];       // tail_pad_0..2 in model coordinates
 export function buildProspectorGLB(gltf) {
   const model = gltf.scene; prep(model, whiteTint, 0.6);
   const get = (n) => model.getObjectByName(n);
@@ -191,6 +194,18 @@ export function buildProspectorGLB(gltf) {
     t = clamp(t, 0, 1); if (last[name] !== undefined && Math.abs(last[name] - t) < 1e-3) return; last[name] = t;
     a.time = t * a.getClip().duration; mixer.update(0);
   };
+  // ---- read the contact geometry from the file's anchors (rove pose, legs extended)
+  {
+    const lg = actions[P_CLIP.legs]; const saved = lg ? lg.time : 0; if (lg) { lg.time = lg.getClip().duration; mixer.update(0); }
+    model.updateMatrixWorld(true);
+    const inv = model.matrixWorld.clone().invert(), p = new V3();
+    for (let i = 0; i < 6; i++) { const w = get('wheel_' + i); if (w) { w.getWorldPosition(p).applyMatrix4(inv); P_WHEELS[i][0] = p.x; P_WHEELS[i][1] = p.z; } }
+    const tyre = get('wheel_0_tyre'); if (tyre && tyre.geometry) { tyre.geometry.computeBoundingBox(); const bb = tyre.geometry.boundingBox; P_WHEEL_R = Math.max(bb.max.y - bb.min.y, bb.max.z - bb.min.z) / 2 || P_WHEEL_R; }
+    const pads = [0, 1, 2].map((i) => get('tail_pad_' + i)); if (pads.every(Boolean)) { P_PADS.forEach((q, i) => { pads[i].getWorldPosition(p).applyMatrix4(inv); q[0] = p.x; q[1] = p.y; q[2] = p.z; }); P_PAD_LIFT = Math.max(...P_PADS.map((q) => q[2])); }
+    const com = get('com_ref'); if (com) { com.getWorldPosition(p).applyMatrix4(inv); P_COM_V.set(p.x, P_PAD_LIFT - p.z, p.y); }
+    const dk = get('dock_port'); if (dk) { dk.getWorldPosition(p).applyMatrix4(inv); P_DOCK.copy(p); }
+    if (lg) { lg.time = saved; mixer.update(0); }
+  }
   const flight = new THREE.Group(), tipG = new THREE.Group();
   flight.add(tipG); tipG.add(model);
   model.quaternion.setFromAxisAngle(new V3(1, 0, 0), Math.PI / 2); model.position.set(0, P_PAD_LIFT, 0);     // vertical stance: nose up, tail pads on the ground
@@ -201,7 +216,7 @@ export function buildProspectorGLB(gltf) {
     tipG.rotation.set(phi, 0, 0);
     let low = 1e9;
     for (const [, my] of P_PADS) low = Math.min(low, -my * sn);                                       // pad: y'' = (4.8 - 4.8) cos - my sin
-    if (tip > 0.001) for (const [, wz] of P_WHEELS) low = Math.min(low, (P_PAD_LIFT - wz) * c - 0.65 * sn - P_WHEEL_R);
+    if (tip > 0.001) for (const [, wz] of P_WHEELS) low = Math.min(low, (P_PAD_LIFT - wz) * c - P_WHEEL_R * sn - P_WHEEL_R);
     tipG.position.set(0, -Math.max(0, low), P_PAD_LIFT * tip);       // at tip 1 the rover origin (centre, on the ground) sits at the flight-frame origin
   };
   setTip(0);

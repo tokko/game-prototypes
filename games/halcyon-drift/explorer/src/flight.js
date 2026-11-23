@@ -15,14 +15,70 @@ export const SAFE_VSPEED = 4.0, SAFE_HSPEED = 3.5, SAFE_TILT = 22 * D2R;
 
 // ------------------------------------------------------------------ guidance laws (ENU world frame, pure)
 /** powered descent: thrust-acceleration vector that tracks a vertical speed profile and kills horizontal speed */
-export function guideLand(h, vel, aMax, gEff, out = new V3()) {
+export function guideLand(h, vel, aMax, gEff, out = new V3(), vyCap = 1e9) {
   const aNet = Math.max(aMax - gEff, 0.6);
-  const vy = -clamp(Math.min(Math.sqrt(2 * 0.5 * aNet * Math.max(h - 1.6, 0)), 1.0 + 0.2 * h), 0.9, 400);      // final-approach cap: the tracking lag grows with aNet, so a light craft must not arrive at the full braking-curve speed
+  const vy = -clamp(Math.min(Math.sqrt(2 * 0.5 * aNet * Math.max(h - 1.6, 0)), 1.0 + 0.2 * h, vyCap), 0.9, 400);      // final-approach cap: the tracking lag grows with aNet, so a light craft must not arrive at the full braking-curve speed
   const k = 1.0;
   out.set(-vel.x * k, (vy - vel.y) * k + gEff, -vel.z * k);
   if (out.y < 0) out.y = 0;
   return out;
 }
+// ------------------------------------------------------------------ landing-site search (final descent diverts to the nearest flat, dry, cool patch)
+export const SITE_ALT = 3000, SITE_SLOPE = Math.tan(15 * D2R);
+/** is (x, z) a landing patch? half = footprint half-size (m). 5 x 5 samples: plane-fit slope under 15 degrees, no pits / boulders (residual), no water or lava, no hot ground, no loaded obstacles */
+export function siteOk(env, x, z, half) {
+  const n = 5, st = half / 2; let sy = 0, sxy = 0, szy = 0, sxx = 0, szz = 0; const ys = new Float64Array(25);
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const px = x + (i - 2) * st, pz = z + (j - 2) * st, y = env.h(px, pz); ys[j * n + i] = y; sy += y;
+    if (env.waterSurfaceY && env.waterSurfaceY(px, pz) > y - 0.4) return false;
+    if (env.heatAt && (i === 0 || j === 0 || i === 4 || j === 4) && env.heatAt(px, pz) > 0.12) return false;
+  }
+  const cy = sy / 25;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const dx = (i - 2) * st, dz = (j - 2) * st, dy = ys[j * n + i] - cy; sxy += dx * dy; szy += dz * dy; sxx += dx * dx; szz += dz * dz; }
+  const a = sxy / sxx, b = szy / szz;
+  if (Math.hypot(a, b) > SITE_SLOPE) return false;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) if (Math.abs(ys[j * n + i] - cy - a * (i - 2) * st - b * (j - 2) * st) > 0.9) return false;
+  if (env.scatter && env.scatter.collide(x, z, 1, half * 0.85).hit) return false;
+  return true;
+}
+/** nearest acceptable patch to (x, z) within `reach` metres, or null. Rings outward, so the first hit is (about) the nearest. */
+export function findSite(env, x, z, reach, half) {
+  if (siteOk(env, x, z, half)) return { x, z, d: 0 };
+  const step = Math.max(20, reach / 60);
+  for (let r = step; r <= reach; r += step) {
+    const n = Math.max(8, Math.ceil(2 * Math.PI * r / step));
+    for (let k = 0; k < n; k++) { const a = (k + (r / step) % 2 * 0.5) / n * 2 * Math.PI, px = x + Math.cos(a) * r, pz = z + Math.sin(a) * r; if (siteOk(env, px, pz, half)) return { x: px, z: pz, d: r }; }
+  }
+  return null;
+}
+/** descent below SITE_ALT: pick a site once (re-search every 3 s while none is found), then steer the horizontal guidance to it. Overwrites aT.x / aT.z and may cap the sink speed. */
+function siteGuide(v, s, env, alt, aMax, gEff, aT, dt, vh) {
+  const aH = Math.min(Math.sqrt(Math.max(aMax * aMax - (gEff * 1.15) ** 2, 0)) * 0.7, 1.28 * gEff * 1.4);      // sideways acceleration: what the thrust leaves over, and what the 52 degree tilt limit allows at hover thrust
+  s.siteWait = (s.siteWait || 0) - dt;
+  if (!s.site && s.siteWait <= 0 && alt > 120) {
+    s.siteWait = 3;
+    const T = Math.min(110, 25 + alt / 25), reach = clamp(0.2 * aH * T * T, 0, 5000);      // the sink speed is capped to what the diversion needs, so reach is set by sideways acceleration over a hover-long flight
+    const half = v.kind === 'plane' ? 11 : 9;
+    const f = reach > 80 ? findSite(env, s.p.x, s.p.z, reach, half) : null;
+    if (f) { s.site = f; s.events.push('divert'); s.siteWarned = false; }
+    else if (!s.siteWarned) { s.siteWarned = true; s.events.push('nosite'); }
+  }
+  if (!s.site) { if (alt < 60 && vh < 6) aT.x = aT.z = 0; return null; }
+  const dx = s.site.x - s.p.x, dz = s.site.z - s.p.z, d = Math.hypot(dx, dz);
+  s.site.dist = d;
+  if (d < 14) { if (alt < 60 && vh < 6) aT.x = aT.z = 0; return null; }
+  // the descent must not finish before the diversion does: cap the sink speed at what the remaining horizontal flight needs
+  const Th = 2 * Math.sqrt(d / Math.max(aH, 0.3)) * 1.15, cap = 1.6 * alt / Th + 3;
+  guideLand(alt, s.vel, aMax, gEff, aT, cap);
+  aT.y = Math.max(aT.y, gEff);         // never free-fall while diverting: sideways acceleration needs the engine on (the sink speed can only lag the profile, which is the safe side)
+  const vd = Math.min(Math.sqrt(2 * 0.6 * aH * Math.max(d - 8, 0)), 140), ux = dx / d, uz = dz / d;
+  let cx = (ux * vd - s.vel.x) * 0.9, cz = (uz * vd - s.vel.z) * 0.9;
+  const lim = Math.sqrt(Math.max(aMax * aMax - aT.y * aT.y, 0)) * 0.85, m = Math.hypot(cx, cz);
+  if (m > lim) { cx *= lim / m; cz *= lim / m; }
+  aT.x = cx; aT.z = cz;
+  return d;
+}
+
 /** ascent: vertical rise, then accelerate horizontally while holding a climb profile towards the parking altitude */
 export function guideAscent(h, vel, aMax, gEff, heading, hTarget, vCirc, out = new V3(), vzCap = 300) {
   const fwd = _b.set(Math.sin(heading), 0, -Math.cos(heading));
@@ -69,7 +125,7 @@ export function stepFlight(v, ctl, dt, env) {
   const vh = Math.hypot(s.vel.x, s.vel.z);
   const gEff = env.g - (vh * vh) / (env.R + Math.max(0, s.p.y));
   s.gEff = gEff; s.alt = alt; s.vspeed = s.vel.y; s.hspeed = vh;
-  s.events.length = 0;
+  // (events are cleared once per frame by the caller: a frame may run several sub-steps and an event from an early one must not be lost)
   // atmosphere: drag + skin heating (same model as the orbit view, so the handover is continuous)
   const rho = env.rhoAt ? env.rhoAt(Math.max(0, s.p.y)) : 0;
   const spd = s.vel.length();
@@ -82,9 +138,11 @@ export function stepFlight(v, ctl, dt, env) {
 
   const desired = _c.set(0, 1, 0); // desired thrust-acceleration vector (world)
   let aT = new V3(0, gEff, 0), manual = false;
+  if (s.ap !== 'land') s.site = null;
   if (s.ap === 'land') {
     guideLand(alt, s.vel, aMax, gEff, aT);
-    if (alt < 60 && vh < 6) aT.x = aT.z = 0;
+    if (alt < SITE_ALT && env.h) siteGuide(v, s, env, alt, aMax, gEff, aT, dt, vh);
+    else if (alt < 60 && vh < 6) aT.x = aT.z = 0;
   } else if (s.ap === 'ascent') {
     const r = guideAscent(alt, s.vel, aMax, gEff, s.apHeading ?? Math.PI / 2, (env.parkAlt || 40000) * 0.75, Math.sqrt(env.g * env.R * env.R / (env.R + Math.max(alt, 1000))), aT);
     if (r.done) { s.ap = null; s.events.push('orbit'); }
@@ -187,6 +245,7 @@ function contact(v, s, env) {
     if (!s.waterWarn && worst > -40) { s.waterWarn = 1; s.events.push('waterwarn'); }
   } else s.waterWarn = 0;
   if (worst <= 0) return;
+  if (s.ap === 'ascent' && s.vel.y > -0.5) { s.p.y += worst; return; }      // lifting off: the pads are still in contact, that is not a landing
   // touching: evaluate landing
   const n = env.normal(s.p.x, s.p.z, new V3().set(0, 1, 0));
   const up = new V3(0, 1, 0).applyQuaternion(s.q);
