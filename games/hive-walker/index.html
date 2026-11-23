@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hive Walker - war-engine vertical slice</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: Consolas, 'Lucida Console', monospace; color: #ffb648; user-select: none; }
+  canvas { display: block; }
+  .goth { font-family: 'Palatino Linotype', 'Book Antiqua', Georgia, serif; letter-spacing: 0.32em; text-transform: uppercase; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 20;
+    background: radial-gradient(ellipse at center, rgba(10,4,2,0.55) 0%, rgba(0,0,0,0.9) 100%); cursor: pointer; text-align: center; }
+  #overlay h1 { font-weight: normal; font-size: 54px; margin: 0 0 4px; color: #ffcf8a; text-shadow: 0 0 24px #ff5a10, 0 2px 0 #000; }
+  #overlay h2 { font-weight: normal; font-size: 13px; margin: 0 0 30px; color: #c9773a; }
+  #overlay table { border-collapse: collapse; font-size: 13px; color: #e0a868; margin-bottom: 26px; }
+  #overlay td { padding: 3px 14px; text-align: left; border-bottom: 1px solid rgba(255,150,60,0.15); }
+  #overlay td:first-child { color: #ffd9a0; text-align: right; }
+  #overlay .go { font-size: 15px; color: #ffcf8a; animation: pulse 1.4s infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; text-shadow: 0 0 6px rgba(255,120,20,0.7); }
+  #vig { position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0) 52%, rgba(0,0,0,0.55) 100%); }
+  #scan { position: fixed; inset: 0; pointer-events: none; z-index: 6; opacity: 0.07; background: repeating-linear-gradient(0deg, #000 0 1px, transparent 1px 3px); }
+  #hurt { position: fixed; inset: 0; pointer-events: none; z-index: 7; opacity: 0; background: radial-gradient(ellipse at center, rgba(255,30,0,0) 40%, rgba(255,30,0,0.75) 100%); }
+  #ret { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px; border: 1.5px solid rgba(255,182,72,0.75); border-radius: 50%; box-shadow: 0 0 8px rgba(255,120,20,0.5); }
+  #ret::before { content: ''; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; background: #ffd9a0; border-radius: 50%; }
+  #ret i { position: absolute; background: #ffb648; }
+  #ret i:nth-child(1) { left: 50%; top: -12px; width: 1.5px; height: 10px; } #ret i:nth-child(2) { left: 50%; bottom: -12px; width: 1.5px; height: 10px; }
+  #ret i:nth-child(3) { top: 50%; left: -12px; height: 1.5px; width: 10px; } #ret i:nth-child(4) { top: 50%; right: -12px; height: 1.5px; width: 10px; }
+  #hitm { position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; margin: -15px 0 0 -15px; opacity: 0; transform: rotate(45deg); }
+  #hitm::before, #hitm::after { content: ''; position: absolute; background: #fff2c0; box-shadow: 0 0 8px #ff7a10; }
+  #hitm::before { left: 14px; top: 0; width: 2px; height: 30px; -webkit-mask: linear-gradient(#000 0 30%, transparent 30% 70%, #000 70%); mask: linear-gradient(#000 0 30%, transparent 30% 70%, #000 70%); }
+  #hitm::after { top: 14px; left: 0; height: 2px; width: 30px; -webkit-mask: linear-gradient(90deg, #000 0 30%, transparent 30% 70%, #000 70%); mask: linear-gradient(90deg, #000 0 30%, transparent 30% 70%, #000 70%); }
+  #ret.ally { border-color: #8fd4ff; box-shadow: 0 0 10px #3aa0ff; }
+  #allyWarn { position: absolute; left: 50%; top: 50%; transform: translate(-50%, 40px); font-size: 11px; letter-spacing: 0.2em; color: #bfe6ff; text-shadow: 0 0 8px #3aa0ff; display: none; white-space: nowrap; }
+  #heatArc { position: absolute; left: 50%; top: 50%; width: 76px; height: 76px; margin: -38px 0 0 -38px; }
+  #lock { position: absolute; width: 54px; height: 54px; margin: -27px 0 0 -27px; border: 2px solid #ff5030; transform: rotate(45deg); display: none; box-shadow: 0 0 10px #ff3010; }
+  #lock.ok { border-color: #fff2c0; box-shadow: 0 0 16px #ffb040; }
+  #lockTxt { position: absolute; font-size: 11px; color: #ffd9a0; display: none; transform: translate(34px, -30px); white-space: nowrap; }
+  .panel { position: absolute; bottom: 22px; font-size: 12px; line-height: 1.5; padding: 10px 14px 9px; border: 1px solid rgba(255,160,60,0.35); border-top: 3px double rgba(255,160,60,0.6);
+    background: linear-gradient(180deg, rgba(20,8,2,0.55), rgba(0,0,0,0.35)); }
+  #bl { left: 22px; width: 250px; } #br { right: 22px; width: 250px; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 3px 0; } .row b { width: 68px; font-weight: normal; color: #d99548; } .row span { width: 34px; text-align: right; }
+  .bar { flex: 1; height: 9px; background: rgba(255,150,50,0.12); position: relative; outline: 1px solid rgba(255,150,50,0.25); }
+  .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: #ffb648; box-shadow: 0 0 8px #ff7a10; }
+  .bar::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 7px, rgba(0,0,0,0.85) 7px 9px); }
+  .bar.bad i { background: #ff4020; box-shadow: 0 0 10px #ff2000; }
+  .ttl { font-size: 10px; color: #c9773a; margin-bottom: 4px; }
+  #threat { position: absolute; left: 50%; top: 13%; transform: translateX(-50%); text-align: center; display: none; color: #ff4a28; text-shadow: 0 0 14px #ff2000; }
+  #threat .big { font-size: 25px; animation: pulse 0.35s infinite; } #threat .sub { font-size: 12px; margin-top: 4px; color: #ffb090; }
+  #threat .tb { width: 320px; height: 6px; margin: 8px auto 0; background: rgba(255,60,20,0.2); } #threat .tb i { display: block; height: 100%; background: #ff4a28; box-shadow: 0 0 10px #ff2000; }
+  #melta { position: absolute; left: 50%; top: 62%; transform: translateX(-50%); font-size: 14px; color: #ffe0a0; display: none; animation: pulse 0.25s infinite; text-shadow: 0 0 12px #ff8a10; }
+  #msg { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); font-size: 15px; color: #ffcf8a; opacity: 0; transition: opacity 0.5s; white-space: nowrap; }
+  #front { position: absolute; left: 22px; top: 18px; font-size: 11px; line-height: 1.55; color: #d99548; }
+  #front .goth { font-size: 13px; color: #ffcf8a; }
+  #twist { position: absolute; left: 50%; bottom: 24px; width: 92px; height: 92px; margin-left: -46px; }
+  #dead { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; background: rgba(40,0,0,0.35); color: #ff6a40; }
+  #dead > div:first-child { font-size: 40px; text-shadow: 0 0 20px #ff2000; }
+  #pipFrame { position: absolute; opacity: 0; border: 3px double #c98a3a; border-radius: 12px 12px 4px 4px; box-shadow: 0 0 0 2px #1a0c04, 0 0 22px rgba(255,110,20,0.45), inset 0 0 26px rgba(0,0,0,0.9); }
+  #pipFrame::before { content: 'LEGS - HEADING'; position: absolute; left: 50%; top: -11px; transform: translateX(-50%); font-size: 10px; letter-spacing: 0.3em; background: #120803; padding: 1px 10px; border: 1px solid #c98a3a; color: #ffcf8a; white-space: nowrap; }
+  #pipFrame::after { content: ''; position: absolute; left: 50%; bottom: 8px; width: 0; height: 0; margin-left: -7px; border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 14px solid rgba(255,190,90,0.85); }
+  .bar.veil i { background: #8fd4ff; box-shadow: 0 0 9px #3aa0ff; }
+  #cols { margin-top: 8px; width: 250px; }
+  .col { margin: 5px 0; font-size: 10px; letter-spacing: 0.14em; color: #ffcf8a; font-family: 'Palatino Linotype', Georgia, serif; }
+  .col.foe { color: #ff9a70; }
+  .col span { display: block; margin-bottom: 2px; }
+  .cb { height: 3px; background: rgba(255,150,50,0.14); margin-bottom: 1px; border-left: 2px solid currentColor; border-right: 2px solid currentColor; }
+  .cb i { display: block; height: 100%; }
+  .cb.sh i { background: #8fd4ff; box-shadow: 0 0 6px #3aa0ff; }
+  .cb.hp { height: 6px; } .cb.hp i { background: #ffb648; box-shadow: 0 0 6px #ff7a10; }
+  .col.sm { margin: 3px 0; font-size: 9px; } .col.sm .cb { height: 2px; } .col.sm .cb.hp { height: 4px; }
+  .col.foe .cb.hp i { background: #ff5a30; box-shadow: 0 0 6px #ff2000; }
+  #auspex { position: absolute; left: 22px; bottom: 196px; width: 224px; height: 224px; }
+  #auspexDisc { position: absolute; inset: 0; border-radius: 50%; overflow: hidden; border: 3px double #58c98a; box-shadow: 0 0 0 2px #04140a, 0 0 18px rgba(60,255,140,0.3), inset 0 0 34px rgba(0,0,0,0.9); }
+  #endScreen { position: fixed; inset: 0; z-index: 30; display: none; flex-direction: column; align-items: center; justify-content: center; background: rgba(8,3,1,0.82); color: #e0a868; text-align: center; }
+  #endScreen h1 { font-weight: normal; font-size: 64px; margin: 0 0 6px; letter-spacing: 0.2em; text-shadow: 0 0 26px #ff5a10; } #endScreen h2 { font-weight: normal; font-size: 14px; margin: 0 0 26px; color: #c9773a; }
+  #endStats { font-size: 13px; line-height: 1.9; margin-bottom: 28px; color: #ffd9a0; } #deploy { font-size: 15px; padding: 10px 28px; letter-spacing: 0.2em; background: rgba(60,25,6,0.8); color: #ffcf8a; border: 1px solid #c98a3a; cursor: pointer; }
+  #picker { display: flex; gap: 12px; margin: 0 0 22px; } #pickerDead { display: flex; gap: 10px; margin-top: 18px; pointer-events: auto; }
+  .card { width: 150px; padding: 8px 8px 10px; border: 1px solid rgba(255,150,60,0.35); background: rgba(20,8,2,0.65); color: #e0a868; font-size: 10px; cursor: pointer; text-align: center; }
+  .card.sel { border-color: #ffcf8a; box-shadow: 0 0 14px rgba(255,120,30,0.5); color: #ffe0b0; }
+  .card b { display: block; font-weight: normal; font-size: 12px; letter-spacing: 0.12em; margin: 4px 0; color: #ffd9a0; } .card span { display: block; line-height: 1.35; }
+  .card .sil { height: 56px; display: flex; align-items: flex-end; justify-content: center; } .card .sil i { display: block; width: 18px; background: linear-gradient(#ffb25a, #7a3a10); clip-path: polygon(30% 0, 70% 0, 100% 35%, 85% 100%, 15% 100%, 0 35%); }
+  #caps { position: absolute; right: 336px; bottom: 40px; display: none; gap: 9px; align-items: flex-end; }
+  .cap { position: relative; width: 14px; height: 86px; border: 1px solid rgba(255,190,110,0.5); background: rgba(0,0,0,0.45); }
+  .cap i { position: absolute; left: 0; right: 0; bottom: 0; display: block; } .cap u { position: absolute; left: 0; right: 0; background: repeating-linear-gradient(45deg, rgba(255,255,255,0.75) 0 3px, rgba(0,0,0,0.5) 3px 6px); }
+  .cap b { position: absolute; bottom: -13px; left: -8px; right: -8px; text-align: center; font-size: 8px; font-weight: normal; letter-spacing: 0.08em; color: #c9a070; }
+  #capW { background: #5ab8ff; } #capD { background: #d8cfa8; } #capA { background: #ffb02e; }
+  #wrath { position: absolute; right: 420px; bottom: 40px; width: 60px; height: 100px; display: none; text-shadow: none; z-index: 13; }
+  #wrath .wb { position: absolute; left: 0; bottom: 0; width: 14px; height: 100px; border: 1px solid rgba(255,190,110,0.5); background: rgba(0,0,0,0.45); }
+  #wrFill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: linear-gradient(to top, #ffc93c, #ff3a20) bottom / 100% 100px no-repeat; }
+  #wrath u { position: absolute; left: -3px; right: -3px; height: 1px; background: #fff0c8; }
+  #wrath .wi { position: absolute; left: 20px; width: 14px; height: 14px; line-height: 14px; text-align: center; font-size: 9px; border: 1px solid rgba(255,190,110,0.4); color: rgba(255,200,130,0.4); background: rgba(0,0,0,0.5); }
+  #wrath .wi.on { color: #1a0c04; background: #ffc93c; border-color: #fff0c8; box-shadow: 0 0 8px #ffa020; }
+  #wrTxt { position: absolute; left: -22px; right: -30px; bottom: -14px; text-align: center; font-size: 8px; letter-spacing: 0.08em; color: #c9a070; white-space: nowrap; }
+  #wrLbl { position: absolute; left: 20px; top: 0; font-size: 8px; letter-spacing: 0.2em; color: #c9a070; }
+  #ordp { position: absolute; left: 286px; bottom: 44px; display: none; flex-direction: column; gap: 4px; text-shadow: none; z-index: 13; }
+  .chip { font-size: 10px; letter-spacing: 0.08em; padding: 3px 7px; border: 1px solid rgba(255,255,255,0.18); background: rgba(4,14,8,0.65); white-space: nowrap; }
+  .chip b { font-weight: normal; margin-right: 6px; } .chip span { opacity: 0.9; }
+  #plantTag { position: absolute; right: 322px; bottom: 148px; display: none; font-size: 10px; letter-spacing: 0.25em; color: #9fe8a0; text-shadow: 0 0 8px #30c060; }
+  #doll { position: absolute; left: 50%; top: 50%; margin: 30px 0 0 48px; display: none; opacity: 0.92; } #myDoll { display: none; margin: 4px 0 0 2px; }
+  #static { position: absolute; inset: 0; display: none; pointer-events: none; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.10) 0 1px, transparent 1px 3px), radial-gradient(circle, rgba(120,120,120,0.12), rgba(10,10,10,0.5)); animation: stat 0.14s steps(2) infinite; mix-blend-mode: screen; }
+  @keyframes stat { 0% { background-position: 0 0, 0 0; opacity: 0.55; } 50% { background-position: 9px 4px, 0 0; opacity: 0.3; } }
+  .lockb { position: absolute; display: none; width: 56px; height: 56px; margin: -28px 0 0 -28px; pointer-events: none; font-size: 11px; font-weight: bold; text-align: center; line-height: 14px; }
+  .lockb::before { content: ''; position: absolute; inset: 0; background: linear-gradient(currentColor, currentColor) 0 0 / 16px 3px no-repeat, linear-gradient(currentColor, currentColor) 0 0 / 3px 16px no-repeat, linear-gradient(currentColor, currentColor) 100% 0 / 16px 3px no-repeat, linear-gradient(currentColor, currentColor) 100% 0 / 3px 16px no-repeat, linear-gradient(currentColor, currentColor) 0 100% / 16px 3px no-repeat, linear-gradient(currentColor, currentColor) 0 100% / 3px 16px no-repeat, linear-gradient(currentColor, currentColor) 100% 100% / 16px 3px no-repeat, linear-gradient(currentColor, currentColor) 100% 100% / 3px 16px no-repeat; }
+  #lockL { color: #ffc93c; } #lockR { color: #c59bff; } .lockb { text-shadow: 0 0 4px #000; }
+  #tac { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; z-index: 12; border: 3px double #58c98a; border-radius: 50%; box-shadow: 0 0 40px rgba(60,255,140,0.35), inset 0 0 50px rgba(0,0,0,0.85); background: rgba(2,14,8,0.5); }
+  #tacCv { border-radius: 50%; display: block; } #tacCursor { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid #fff2c0; border-radius: 50%; box-shadow: 0 0 8px #ffd25a; pointer-events: none; }
+  #tacCursor::after { content: ''; position: absolute; left: 4px; top: 4px; width: 2px; height: 2px; background: #fff2c0; }
+  #tacTop { position: absolute; left: 50%; top: -18px; transform: translateX(-50%); white-space: nowrap; font-size: 10px; letter-spacing: 0.3em; background: #04140a; padding: 1px 10px; border: 1px solid #58c98a; color: #a8ffcf; }
+  #tacPlates { position: absolute; right: 100%; top: 50%; transform: translateY(-50%); margin-right: 16px; width: 168px; }
+  .plate { position: relative; height: 46px; margin: 8px 0; padding: 4px 6px 4px 30px; box-sizing: border-box; border: 1px solid rgba(88,201,138,0.45); background: rgba(2,14,8,0.6); color: #7ad6a2; font-size: 9px; letter-spacing: 0.08em; }
+  .plate b { position: absolute; left: 6px; top: 6px; width: 18px; height: 18px; line-height: 18px; text-align: center; border: 1px solid #7ad6a2; font-weight: normal; font-size: 12px; } .plate span { display: block; margin-top: 2px; } .plate i { display: block; font-style: normal; margin-top: 4px; opacity: 0.85; }
+  .plate.sel { border: 2px solid var(--gc); background: color-mix(in srgb, var(--gc) 22%, transparent); color: #fff; transform: translateX(8px); } .plate.sel b { background: var(--gc); color: #000; border-color: var(--gc); } .plate.sel i { color: var(--gc); }
+  #tacVig { position: fixed; inset: 0; z-index: 11; display: none; pointer-events: none; background: radial-gradient(circle, transparent 35%, rgba(2,14,8,0.78) 100%), rgba(8,30,18,0.35); } #tacVig::before { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 3px); }
+  #tacVig .bar { position: absolute; left: 0; right: 0; height: 28px; line-height: 28px; background: #000; color: #a8ffcf; font-size: 11px; letter-spacing: 0.25em; padding: 0 18px; } #tacVig .top { top: 0; display: flex; justify-content: space-between; } #tacVig .bot { bottom: 0; text-align: center; font-size: 10px; opacity: 0.8; }
+  #hud.tacOn > *:not(#br):not(#tac):not(#objs):not(#wrath):not(#ordp) { opacity: 0.45; }
+  #auspexCv { width: 100%; height: 100%; display: block; }
+  #auspexSweep { position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(from 0deg, rgba(130,255,180,0.34), rgba(130,255,180,0.0) 24%, rgba(130,255,180,0) 100%); animation: sweep 3.6s linear infinite; mix-blend-mode: screen; }
+  #auspexDisc::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, rgba(0,0,0,0.28) 0 1px, transparent 1px 3px); }
+  @keyframes sweep { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
+  #auspex .lbl { position: absolute; left: 50%; top: -9px; transform: translateX(-50%); font-size: 10px; letter-spacing: 0.3em; background: #04140a; padding: 1px 10px; border: 1px solid #58c98a; color: #a8ffcf; text-shadow: 0 0 6px rgba(60,255,140,0.7); white-space: nowrap; }
+  #auspex .key { position: absolute; left: 0; right: 0; bottom: -15px; text-align: center; font-size: 9px; color: #7ad6a2; text-shadow: none; white-space: nowrap; }
+  #auspex .key b { font-weight: normal; color: #ff7a56; }
+  #objs { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; text-shadow: none; }
+  #objs .pips { display: flex; gap: 10px; } #objs .cnt { font-size: 12px; letter-spacing: 0.2em; white-space: nowrap; padding: 4px; } #objs .cnt.blink { animation: pulse 0.5s steps(1) infinite; }
+  .pip { position: relative; width: 38px; height: 48px; box-sizing: border-box; border: 1.5px solid rgba(184,176,160,0.5); background: rgba(10,6,2,0.7); color: #b8b0a0; overflow: visible; }
+  .pip .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; } .pip svg { position: absolute; left: 9px; top: 5px; width: 20px; height: 20px; }
+  .pip b { position: absolute; left: 0; right: 0; bottom: 3px; text-align: center; font-size: 12px; letter-spacing: 0.1em; line-height: 16px; }
+  .pip .tm { position: absolute; left: 0; right: 0; bottom: -6px; height: 2px; display: none; } .pip .tm i { display: block; height: 100%; }
+  .pip.cont { animation: pipc 0.333s steps(1) infinite; } @keyframes pipc { 0% { border-color: #ffb23c; box-shadow: 0 0 6px #ffb23c; } 50% { border-color: #5cff6a; box-shadow: 0 0 6px #5cff6a; } }
+  .pip.flip { background: rgba(255,255,255,0.9); transform: scale(1.25); transition: transform 0.3s; }
+  #tacTip { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: none; max-width: 80%; font-size: 9px; letter-spacing: 0.06em; padding: 3px 8px; background: #04140a; border: 1px solid #58c98a; color: #a8ffcf; text-align: center; pointer-events: none; z-index: 2; }
+  #fps { position: absolute; right: 22px; top: 14px; font-size: 10px; opacity: 0.55; text-align: right; white-space: pre; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="vig"></div><div id="scan"></div><div id="hurt"></div>
+<div id="hud">
+  <div id="ret"><i></i><i></i><i></i><i></i></div>
+  <svg id="heatArc" viewBox="0 0 76 76"><path id="heatPath" d="" fill="none" stroke="#ff7a20" stroke-width="3"/></svg>
+  <div id="hitm"></div>
+  <div id="allyWarn">ALLY IN YOUR FIRE</div>
+  <div id="lock"></div><div id="lockTxt"></div>
+  <div id="objs"><div class="cnt v"></div><div class="pips"></div><div class="cnt s"></div></div>
+  <div id="front"><div class="goth">Karnite Vigil - Spire District IX</div><div id="frontTxt"></div><div id="cols"></div></div>
+  <div id="threat"><div class="big goth">Colossus has seen you</div><div class="sub">BREAK LINE OF SIGHT - GET BEHIND A BUILDING</div><div class="tb"><i id="threatBar"></i></div></div>
+  <div id="melta">FUSION-LANCE TEAM - PROTECT YOUR LEGS</div>
+  <div id="msg" class="goth"></div>
+  <div id="bl" class="panel">
+    <div class="ttl goth">Engine integrity</div>
+    <div class="row"><b>VEIL</b><div class="bar veil" id="bVeil"><i></i></div><span id="tVeil"></span></div>
+    <div class="row"><b>HULL</b><div class="bar" id="bHull"><i></i></div><span id="tHull"></span></div>
+    <div class="row"><b>LEG - L</b><div class="bar" id="bLegL"><i></i></div><span id="tLegL"></span></div>
+    <div class="row"><b>LEG - R</b><div class="bar" id="bLegR"><i></i></div><span id="tLegR"></span></div>
+    <div id="myDoll"></div>
+    <div id="gait" style="font-size:10px;color:#c9773a;margin-top:3px"></div>
+  </div>
+  <svg id="twist" viewBox="-50 -50 100 100">
+    <circle r="40" fill="rgba(0,0,0,0.35)" stroke="#c98a3a" stroke-width="1.2"/>
+    <path d="M-34.6,-20 A40,40 0 0 1 34.6,-20" fill="none" stroke="#5a3a18" stroke-width="5" id="twArc"/>
+    <g id="twLegs"><path d="M0,-36 L7,-14 L3,-14 L3,22 L-3,22 L-3,-14 L-7,-14 Z" fill="#c9773a" opacity="0.85"/><rect x="-12" y="14" width="7" height="12" fill="#c9773a"/><rect x="5" y="14" width="7" height="12" fill="#c9773a"/></g>
+    <path d="M0,-44 L5,-33 L-5,-33 Z" fill="#ffe0a0"/><rect x="-9" y="-7" width="18" height="12" fill="none" stroke="#ffe0a0" stroke-width="1.5"/>
+  </svg>
+  <div id="br" class="panel">
+    <div class="ttl goth">Armament</div>
+    <div class="row"><b>INFERNO</b><div class="bar" id="bHeat"><i></i></div><span id="tHeat"></span></div>
+    <div class="row"><b>CANNON</b><div class="bar" id="bCan"><i></i></div><span id="tCan"></span></div>
+    <div class="row"><b>AA RACK</b><div class="bar" id="bAA"><i></i></div><span id="tAA"></span></div>
+    <div class="row"><b>SUNSPEAR</b><div class="bar" id="bSpear"><i></i></div><span id="tSpear"></span></div>
+    <div class="row"><b>COOLANT</b><div class="bar" id="bCool"><i></i></div><span id="tCool"></span></div>
+    <div id="ffTxt" style="font-size:10px;color:#ff6a40;margin-top:3px"></div>
+    <div id="kills" style="font-size:10px;color:#c9773a;margin-top:3px"></div>
+  </div>
+  <div id="auspex"><div id="auspexDisc"><canvas id="auspexCv"></canvas><div id="auspexSweep"></div></div><div class="lbl">AUSPEX 300 M</div><div class="key">VIGIL &middot; <b>SYNOD</b> &middot; &#9679; inf &#9632; armour &#9670; scout &#9650; colossus + air</div></div>
+  <div id="pipFrame"></div>
+  <div id="caps"><div class="cap"><i id="capW"></i><u></u><b>WARD</b></div><div class="cap"><i id="capD"></i><u></u><b>DRIVE</b></div><div class="cap"><i id="capA"></i><u></u><b>ARMS</b></div></div><div id="plantTag">PLANTED</div>
+  <div id="wrath"><div class="wb"><i id="wrFill"></i><u style="bottom:30px"></u><u style="bottom:50px"></u><u style="bottom:99px"></u></div><div class="wi" id="wrE" style="bottom:23px">E</div><div class="wi" id="wrC" style="bottom:43px">C</div><div class="wi" id="wrX" style="bottom:86px">X</div><div id="wrLbl">WRATH</div><div id="wrTxt"></div></div>
+  <div id="ordp"></div>
+  <div id="doll"></div><div id="static"></div>
+  <div id="lockL" class="lockb">L</div><div id="lockR" class="lockb">R</div>
+  <div id="tacVig"><div class="bar top"><span>TACTICAL COGITATION</span><span>TIME x0.3</span></div><div class="bar bot">1-4 GROUP &nbsp; LMB ORDER &nbsp; RMB CLEAR &nbsp; F COMMAND (1-4+F: ONE GROUP) &nbsp; X NAIL &nbsp; WASD WALK &nbsp; TAB: TOGGLE TACTICAL VIEW</div></div>
+  <div id="tac"><div id="tacTop"></div><div id="tacPlates"></div><canvas id="tacCv"></canvas><div id="tacCursor"></div><div id="tacTip"></div></div>
+  <div id="dead"><div class="goth">Engine lost</div><div style="margin-top:10px;font-size:13px">a fresh walker is striding up from the rear... choose your engine (keys 1-4)</div><div id="pickerDead"></div></div>
+  <div id="fps"></div>
+</div>
+<div id="endScreen"><h1 class="goth" id="endTitle"></h1><h2 class="goth" id="endSub"></h2><div id="endStats"></div><button id="deploy" class="goth">Deploy again</button></div>
+<div id="overlay">
+  <h1 class="goth">Hive Walker</h1>
+  <h2 class="goth">Karnite Vigil &middot; Spire District IX</h2>
+  <div id="picker"></div>
+  <table>
+    <tr><td>W / S</td><td>advance / back up, relative to where you aim</td></tr>
+    <tr><td>A / D</td><td>strafe - the legs swing to the travel direction (W+D runs diagonally); hard direction changes brace and skid</td></tr>
+    <tr><td>Shift (hold)</td><td>sprint - 1.6x speed, burns coolant, narrows twist, widens gatling spread</td></tr>
+    <tr><td>Mouse</td><td>aim + turn the engine - the torso leads, the legs follow and get dragged past the waist limit</td></tr>
+    <tr><td>LMB</td><td>inferno projector - 40 m of sticky fire; burns squads, denies lanes, drains pressure</td></tr>
+    <tr><td>RMB</td><td>autocannon arm - kills tanks, cracks buildings</td></tr>
+    <tr><td>E (hold 1.5 s)</td><td>sunspear - 78 m fusion beam, 20 s cooldown; burn a colossus knee or its back</td></tr>
+    <tr><td>Q (hold, release)</td><td>anti-air rack - hold on an aircraft to lock, release to fire</td></tr>
+    <tr><td>H</td><td>toggle HUD</td></tr>
+    <tr><td>Heavy classes</td><td>Harrow / Hierarch / Colossus: Tab tactical view, G paints a fire zone, MMB locks an arm</td></tr>
+    <tr><td>F</td><td>heavies: order at the crosshair (or the Tab cursor) - an engine: kill it; ground: clear it; a site: take or hold it</td></tr>
+    <tr><td>1-4 + F</td><td>heavies: send the order to one group only (1 wing, 2 lance, 3 armour, 4 cohort)</td></tr>
+    <tr><td>R / V</td><td>heavies: R - on me (lance and armour form up, wing screens, cohort holds); V - stand down, all groups back to the director</td></tr>
+    <tr><td>E / C / X</td><td>heavies, spend Wrath (earned by smashing things): E war horn (30), C overcharge (50), X Heaven's Nail (100, at the crosshair)</td></tr>
+  </table>
+  <div class="go goth">Raising the hive...</div>
+  <h2 class="goth" style="margin-top:26px;max-width:640px;line-height:1.7">Clear the streets for your colossi. Stay out from under their feet. Friendly fire is total - yours and everyone else's. Your ward veil eats one heavy hit, then your knees are bare. When an enemy colossus sees you, break line of sight.</h2>
+</div>
+<script type="module" src="./js/main.js?v=32"></script>
+</body>
+</html>
