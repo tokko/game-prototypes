@@ -298,68 +298,124 @@ function choir() {
 }
 
 // ---- the sobbing woman (round 2, see apparitions.js): one voice, spatialised at her window ---------------------------
-// Irregular episodes: each sob is a quick catching inhale (often stuttered, a thin whine under it) then a trembling voiced
-// exhale (sawtooth with vibrato and tremor through three female-vowel formants, falling pitch, now and then a voice
-// crack), with the odd hiccup, whimper and a shuddering out-breath, then a silence of a second or two. api: stop() cuts
-// dead, fade(sec), tick() (driven from update).
-const FEM = [[850, 1220, 2810], [760, 1400, 2780], [610, 1100, 2450], [500, 910, 2500]];   // ah, uh, aw, o
-const SOB_PEAK = 0.7;
+// Breath-driven and never periodic. A cluster is 2-4 sobs with unequal gaps (sometimes a voiced "hic" intake or a wet catch in
+// between), then a longer shuddering intake, sometimes a long shaky out-breath, then a silence of a second or two. Each sob is a
+// stuttered breath-in (ragged chest-catch) and a pitch-falling breathy exhale: a glottal-like pulse train (PeriodicWave) with
+// vibrato, pitch and amplitude jitter, voice hitches and a creaky tail, plus aspirated noise, both through three moving formant
+// filters sliding from a female /a/ towards /e/. A faint short room reverb sits behind the dry voice. api: stop() cuts dead,
+// fade(sec), tick() (driven from update), pulse() (0..1 shudder of her shoulders, in step with the sobs), schedule(untilSec).
+const SOB_VOW = { a: [850, 1220, 2810], e: [560, 2150, 2850], o: [560, 960, 2600] };   // female /a/, /e/, /o/ formants (F1 F2 F3)
+const SOB_PEAK = 0.22;
 const sobbers = new Set();
+let glottalWave = null, roomIR = null;
+function glottal() {   // glottal-flow-like spectrum: harmonics fall about 7 dB/octave, phases a little scattered (not a clean saw)
+  if (glottalWave) return glottalWave;
+  const N = 56, re = new Float32Array(N), im = new Float32Array(N);
+  for (let n = 1; n < N; n++) { const a = 1 / Math.pow(n, 1.2), ph = (Math.random() - 0.5) * 0.7; im[n] = a * Math.cos(ph); re[n] = a * Math.sin(ph); }
+  return (glottalWave = ctx.createPeriodicWave(re, im));
+}
 function sobber(pos) {
   if (!ctx) return null;
   const bus = gain(0), pan = makePanner(pos), now0 = ctx.currentTime;
   pan.refDistance = 8; pan.rolloffFactor = 1;
-  bus.connect(filt('lowpass', 3600, 0.5)).connect(pan);
-  bus.gain.setTargetAtTime(1, now0, 0.8);
-  const rr = (a, b) => a + Math.random() * (b - a), pick = (a) => a[(Math.random() * a.length) | 0];
+  const lp = filt('lowpass', 4200, 0.5);
+  bus.connect(filt('highpass', 140, 0.7)).connect(lp); lp.connect(pan);
+  if (!roomIR) { const n = (ctx.sampleRate * 0.5) | 0; roomIR = ctx.createBuffer(1, n, ctx.sampleRate); const d = roomIR.getChannelData(0); let y = 0; for (let i = 0; i < n; i++) { y += 0.5 * ((Math.random() * 2 - 1) - y); d[i] = y * Math.pow(1 - i / n, 3); } }
+  const conv = ctx.createConvolver(); conv.buffer = roomIR; lp.connect(conv).connect(gain(0.22)).connect(pan);   // the faint room
+  bus.gain.setTargetAtTime(1, now0, 0.6);
+  const rr = (a, b) => a + Math.random() * (b - a), pulses = [];   // pulses: { t, d, a } the shoulders' jolts, for pulse()
   const noise = (t, dur) => { const n = ctx.createBufferSource(); n.buffer = noiseBuf('white'); n.start(t, rr(0, 2.5), dur + 0.05); return n; };
-  const ramp = (param, t, pts) => { param.setValueAtTime(pts[0][1], t + pts[0][0]); for (let i = 1; i < pts.length; i++) param.linearRampToValueAtTime(pts[i][1], t + pts[i][0]); };
-  // a voiced exhale. shape = [u, pitch ratio] points over the duration; crack inserts a break in the voice
-  function voiced(t, { f0, dur, amp, vow, crack = false, breathy = 0.3, shape = [[0, 1.15], [0.12, 1], [1, 0.8]] }) {
-    const pts = shape.map(([u, r]) => [u * dur, f0 * r]);
-    if (crack) { const c = dur * rr(0.35, 0.6), r = f0 * (1.05 - 0.25 * c / dur); pts.splice(2, 0, [c, r], [c + 0.025, r * 1.45], [c + 0.1, r * 0.95]); pts.sort((a, b) => a[0] - b[0]); }
-    const o = ctx.createOscillator(); o.type = 'sawtooth'; ramp(o.frequency, t, pts);
-    const vib = ctx.createOscillator(), vg = gain(f0 * 0.028); vib.frequency.value = rr(6.5, 9.5); vib.connect(vg).connect(o.frequency);   // the trembling
-    const tre = ctx.createOscillator(), tg = gain(0.28), am = gain(1); tre.frequency.value = rr(7, 11); tre.connect(tg).connect(am.gain);
-    const src = gain(1), br = gain(breathy * 1.4), env = gain(0);
-    o.connect(am).connect(src); noise(t, dur).connect(br).connect(src);
-    FEM[vow].forEach((f, k) => {
-      const bp = filt('bandpass', f * (k === 0 ? 1.1 : 1), [7, 9, 11][k]);
-      if (k === 0) { bp.frequency.setValueAtTime(f * 1.1, t); bp.frequency.linearRampToValueAtTime(f * 0.82, t + dur); }   // the jaw closes as the breath runs out
-      src.connect(bp); bp.connect(gain([1, 0.6, 0.22][k] * 2.6)).connect(env);
+  // a voiced breath. contour: onset overshoot, then pitch falls by `fall` (negative = rises); quaver = amplitude flutter depth
+  function voiced(t, { f0, dur, amp, v0 = 'a', v1 = 'e', mix = 1, breathy = 0.4, fall = 0.22, onset = 0.12, crack = false, fry = false, hitch = 0, quaver = 0 }) {
+    const n = Math.max(8, Math.round(dur * 160)), fc = new Float32Array(n), ac = new Float32Array(n), nc = new Float32Array(n);
+    const vf = rr(5.2, 7.4), vd = rr(0.012, 0.03), vph = rr(0, 6.28), qf = rr(9, 14), qph = rr(0, 6.28);
+    const dips = []; for (let i = 0; i < hitch; i++) dips.push([rr(0.25, 0.8), Math.max(0.02, rr(0.02, 0.045) / dur)]);
+    const cu = rr(0.3, 0.6); let jit = 0, ajit = 0;
+    for (let i = 0; i < n; i++) {
+      const u = i / (n - 1), s = u * dur;
+      jit = jit * 0.6 + rr(-1, 1) * 0.011; ajit = ajit * 0.5 + rr(-1, 1) * 0.14;
+      let r = (1 + onset * Math.exp(-s / 0.07)) * (1 - fall * u) * (1 + vd * Math.sin(vph + 6.283 * vf * s) + jit);
+      if (crack && u > cu && u < cu + 0.06 / dur) r *= 1.4;                                    // the voice breaks upward for a moment
+      let a = Math.min(1, s / 0.03) * Math.pow(1 - u, 0.75) * (1 + ajit);
+      const nz = Math.min(1, s / 0.02) * Math.pow(1 - u, 0.5) * (1 + rr(-0.3, 0.3));
+      for (const [c, w] of dips) if (Math.abs(u - c) < w / 2) a *= 0.12;                       // chest catch: the voice drops out for a few ms
+      if (quaver) a *= 1 - quaver * (0.5 - 0.5 * Math.cos(6.283 * qf * s + qph));
+      if (fry && u > 0.78) { r = 0.3 * (1 + rr(-0.28, 0.28)); a *= 0.7; }                       // creaky vocal fry at the tail
+      fc[i] = Math.max(40, f0 * r); ac[i] = Math.max(0, a) * amp; nc[i] = Math.max(0, nz) * amp * breathy;
+    }
+    const o = ctx.createOscillator(); o.setPeriodicWave(glottal()); o.frequency.setValueCurveAtTime(fc, t, dur);
+    const vg = gain(0); vg.gain.setValueCurveAtTime(ac, t, dur);
+    const ng = gain(0); ng.gain.setValueCurveAtTime(nc, t, dur);
+    const src = gain(1), A = SOB_VOW[v0], B = SOB_VOW[v1], z = noise(t, dur);
+    o.connect(vg).connect(src); z.connect(ng);
+    A.forEach((f, k) => {   // the same three moving formants shape the pulse train (narrow) and the aspiration noise (wide)
+      for (const [from, q, g] of [[src, [9, 11, 13][k], [3.2, 2.6, 1.8][k]], [ng, [3, 4, 5][k], [5, 4, 3][k]]]) {
+        const bp = filt('bandpass', f, q);
+        bp.frequency.setValueAtTime(f, t); bp.frequency.linearRampToValueAtTime(f + (B[k] - f) * mix, t + dur);
+        from.connect(bp); bp.connect(gain(g)).connect(bus);
+      }
     });
-    env.gain.setValueAtTime(0.0001, t); env.gain.linearRampToValueAtTime(amp, t + Math.min(0.05, dur * 0.25)); env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    env.connect(bus);
-    for (const x of [o, vib, tre]) { x.start(t); x.stop(t + dur + 0.06); }
+    src.connect(filt('lowpass', 700, 0.7)).connect(gain(0.12)).connect(bus);                   // a little chest under the formants
+    o.start(t); o.stop(t + dur + 0.05);
   }
-  function inhale(t, dur, amp, whine = 0) {   // breath in: rising, sharpening noise, cut off short
-    const n = noise(t, dur), bp = filt('bandpass', 1000, 1.2), bp2 = filt('bandpass', 2600, 1.6), g = gain(0);
-    bp.frequency.setValueAtTime(900, t); bp.frequency.linearRampToValueAtTime(2000, t + dur);
-    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(amp * 2.2, t + dur * 0.8); g.gain.linearRampToValueAtTime(0.0001, t + dur + 0.012);
-    n.connect(bp).connect(g); n.connect(bp2).connect(gain(0.5)).connect(g); g.connect(bus);
-    if (whine) tone(bus, t, { freq: 480, freqEnd: 680, type: 'triangle', attack: dur * 0.5, dur: dur * 0.6, gain: whine, lp: 1400 });
+  function breathIn(t, dur, amp, stutter = 1) {   // a rising, sharpening breath cut off short, in `stutter` ragged pieces
+    const z = noise(t, dur + 0.05), bp = filt('bandpass', 700, 1.1), bp2 = filt('bandpass', 2400, 1.6), g = gain(0.0001);
+    bp.frequency.setValueAtTime(600, t); bp.frequency.linearRampToValueAtTime(rr(1700, 2300), t + dur);
+    z.connect(bp).connect(g); z.connect(bp2).connect(gain(0.45)).connect(g); g.connect(bus);
+    let u = t; const d = dur / stutter;
+    for (let j = 0; j < stutter; j++) {
+      const a = amp * (0.55 + 0.45 * (j + 1) / stutter) * rr(0.8, 1.15);
+      g.gain.linearRampToValueAtTime(a, u + d * 0.7); g.gain.linearRampToValueAtTime(0.0001, u + d * 0.7 + 0.012);
+      u += d * rr(0.85, 1.1); g.gain.setValueAtTime(0.0001, u);
+    }
   }
-  const exhale = (t, dur, amp) => noiseBurst(bus, t, { type: 'bandpass', freq: 800, q: 0.9, attack: 0.1, dur, gain: amp * 2 });
-  function sob(t, k) {   // one sob cycle starting at t, returns its end
-    const inD = rr(0.13, 0.24); let u = t;
-    if (Math.random() < 0.6) { const n = 2 + (Math.random() < 0.4 ? 1 : 0); for (let i = 0; i < n; i++) { inhale(u, inD / n * 0.8, SOB_PEAK * rr(0.25, 0.4) * (0.6 + 0.4 * i / n), 0.05); u += inD / n; } }
-    else { inhale(u, inD, SOB_PEAK * rr(0.3, 0.45), 0.04); u += inD; }
-    const dur = rr(0.3, 0.55);
-    voiced(u, { f0: rr(215, 262) * (1 - 0.02 * k), dur, amp: SOB_PEAK * rr(0.55, 1) * (k === 0 ? 1.1 : 1), vow: pick([0, 0, 1, 2]), crack: Math.random() < 0.22 });
-    return u + dur + rr(0.0, 0.3);
+  function wet(t, amp) {   // a wet catch of breath: a tiny click of saliva and a swallowed blip
+    noiseBurst(bus, t, { type: 'bandpass', freq: rr(1800, 3000), q: 7, attack: 0.002, dur: 0.02, gain: amp });
+    noiseBurst(bus, t + 0.01, { type: 'lowpass', freq: 900, attack: 0.004, dur: 0.05, gain: amp * 0.7 });
+    tone(bus, t, { freq: rr(650, 850), freqEnd: 260, attack: 0.002, dur: 0.035, gain: amp * 0.6 });
   }
-  function episode(t) {
-    const n = 3 + ((Math.random() * 4) | 0);
-    for (let i = 0; i < n; i++) t = sob(t, i) + (Math.random() < 0.2 ? rr(0.2, 0.5) : 0);
-    if (Math.random() < 0.35) { voiced(t, { f0: rr(300, 380), dur: 0.09, amp: SOB_PEAK * 0.9, vow: 1, shape: [[0, 0.8], [0.25, 1.35], [1, 0.9]], breathy: 0.15 }); t += rr(0.3, 0.6); }   // a hiccup
-    if (Math.random() < 0.4) { voiced(t, { f0: rr(330, 400), dur: rr(0.5, 0.8), amp: SOB_PEAK * 0.3, vow: 3, breathy: 0.6, shape: [[0, 1], [1, 0.88]] }); t += 0.7; }               // a thin whimper
-    exhale(t, rr(0.7, 1.2), SOB_PEAK * 0.28);
-    return t + rr(1.0, 2.6);
+  function sob(t, k, size) {
+    const inD = rr(0.1, 0.22), r = Math.random();
+    breathIn(t, inD, SOB_PEAK * rr(0.22, 0.4) * size, r < 0.45 ? 1 : r < 0.8 ? 2 : 3);
+    const u = t + inD + rr(0, 0.04), dur = rr(0.28, 0.5) * (0.85 + 0.15 * size);
+    voiced(u, { f0: rr(245, 335) * (1 - 0.025 * k), dur, amp: SOB_PEAK * rr(0.6, 1) * size, mix: rr(0.5, 1), breathy: rr(0.3, 0.65), fall: rr(0.14, 0.3),
+      crack: Math.random() < 0.2, fry: Math.random() < 0.35, hitch: Math.random() < 0.4 ? 1 + (Math.random() < 0.3 ? 1 : 0) : 0 });
+    pulses.push({ t: u, d: dur + 0.1, a: size });
+    return u + dur;
+  }
+  function cluster(t) {
+    const n = 2 + ((Math.random() * 3) | 0);
+    if (Math.random() < 0.3) { wet(t, SOB_PEAK * rr(0.5, 0.9)); t += rr(0.07, 0.16); }
+    for (let i = 0; i < n; i++) {
+      t = sob(t, i, Math.max(0.35, 1 - 0.14 * i * rr(0.4, 1.4)));
+      if (i < n - 1) {
+        t += rr(0.1, 0.5) * (Math.random() < 0.25 ? 2 : 1);                                    // unequal gaps
+        if (Math.random() < 0.3) { voiced(t, { f0: rr(330, 430), dur: 0.11, amp: SOB_PEAK * 0.45, v0: 'e', v1: 'a', breathy: 0.7, fall: -0.25, onset: 0 }); t += 0.14; }   // a voiced "hic" intake
+      }
+    }
+    t += rr(0.1, 0.35);
+    const sd = rr(0.8, 1.7), steps = 5 + ((Math.random() * 5) | 0);                           // the longer shuddering intake
+    breathIn(t, sd, SOB_PEAK * 0.45, steps);
+    voiced(t + 0.05, { f0: rr(360, 440), dur: sd * 0.9, amp: SOB_PEAK * 0.14, v0: 'e', v1: 'a', breathy: 0.8, fall: -0.45, onset: 0, quaver: 0.7 });
+    for (let i = 0; i < steps; i++) pulses.push({ t: t + (sd * (i + rr(0.2, 0.9))) / steps, d: 0.14, a: 0.3 + 0.35 * i / steps });
+    t += sd;
+    if (Math.random() < 0.4) { const d = rr(0.6, 1.1); voiced(t + 0.08, { f0: rr(230, 290), dur: d, amp: SOB_PEAK * 0.38, v0: 'a', v1: 'o', breathy: 0.9, fall: 0.3, fry: true, quaver: 0.35 }); t += d + 0.1; }   // a shaky out-breath
+    return t + rr(0.5, 2.6);
   }
   let next = now0 + 0.3, ended = false;
   const done = (ms) => { ended = true; sobbers.delete(api); setTimeout(() => pan.disconnect(), ms); };
   const api = {
-    tick() { while (!ended && ctx.currentTime + 0.4 >= next) next = episode(Math.max(next, ctx.currentTime + 0.05)); },
+    schedule(until) { while (!ended && until >= next) next = cluster(Math.max(next, ctx.currentTime + 0.05)); },
+    tick() { api.schedule(ctx.currentTime + 0.4); },
+    pulse() {   // how hard her shoulders are jolting now: 0..1, fast attack, slower release
+      const n = ctx.currentTime; let v = 0;
+      for (let i = pulses.length - 1; i >= 0; i--) {
+        const p = pulses[i], x = (n - p.t) / p.d;
+        if (x > 1.5) { pulses.splice(i, 1); continue; }
+        if (x >= 0 && x <= 1) v = Math.max(v, p.a * (x < 0.2 ? x / 0.2 : 1 - (x - 0.2) / 0.8));
+      }
+      return Math.min(1, v);
+    },
     stop() { if (ended) return; const t = ctx.currentTime; bus.gain.cancelScheduledValues(t); bus.gain.setValueAtTime(0, t); done(9000); },   // dead silence
     fade(sec = 3) { if (ended) return; const t = ctx.currentTime; bus.gain.cancelScheduledValues(t); bus.gain.setTargetAtTime(0, t, sec / 4); done(9000 + sec * 1000); },
   };

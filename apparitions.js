@@ -34,11 +34,11 @@ const STEPS_FACE_CONE_DEG = 50; // looking this close to the sound's direction c
 const BREATH_CYCLES = 4;
 
 // Round-2 apparitions (assets/round2/SPEC.md). Each is a self-contained actor with its own slot; none uses the director's `active`.
-const ANGEL_GAPS = [15.5, 11.8, 8, 3.2]; // m behind the player in each pose (steps of 2-5 m); the last is where it stops, never touching
+const ANGEL_GAPS = [19, 14, 9.5, 5]; // m AHEAD of the player in each pose (steps of 2-5 m; it can only be seen if it is in front); the last is where it stops, never touching
 const ANGEL_JITTER = 0.35;      // m, random spread on the gaps before the last
 const ANGEL_CUE = [1.5, 3];     // s from the stone-scrape cue to its first appearance
 const ANGEL_STEP_AFTER = 0.6;   // s unobserved after a look-back before it takes the next pose
-const ANGEL_GAZE_MAX = 3.5;     // s of looking straight at it before a flicker / fog swell takes the look (it moves on during the blink)
+const ANGEL_GAZE_MAX = 2.6;     // s of looking straight at it before a flicker / fog swell takes the look (it moves on during the blink)
 const ANGEL_MIN_DIST = 2.4;     // m: walk back into it and the look is taken away
 const ANGEL_LIFE = 120;         // s, in case the player never leaves the lane
 const CEIL_TILT = 0.26;         // rad the ceiling woman's plane tilts down about its horizontal axis (never rolled)
@@ -46,17 +46,21 @@ const CEIL_GAZE_MAX = 2.4;      // s of looking at her before the lamp flickers 
 const CEIL_GONE_AFTER = 0.35;   // s unobserved after being seen and she is gone
 const SOB_RANGE = [5, 16];      // m from the window within which a gaze counts
 const SOB_SHOW = [1.0, 1.5];    // s of gaze before she can be made out in the dark window
-const SOB_TURN = [2.0, 3.0];    // s of gaze before the sobbing stops and her head comes round
-const SOB_SILENCE = [0.3, 0.5]; // s of dead silence before the head snaps round
-const SOB_HOLD = [0.5, 0.8];    // s she is held in the turned pose, then simply gone
+const SOB_TURN = [2.0, 3.0];    // s of gaze before the sobbing stops and she turns
+const SOB_NEAR_CAP = 9;         // s spent watching her from within range, and she turns anyway
+const SOB_SILENCE = [0.8, 1.2]; // s of dead silence before she turns
+const SOB_TWIST = [0.16, 0.30]; // s: stage 1 (the body twists edge-on), stage 2 (she comes round with a lunge)
+const SOB_STARE = [2.5, 4];     // s (watched) she stares before the smile begins
+const SOB_SMILE = 1.5;          // s (watched) for the smile to grow
+const SOB_AFTER = 1.5;          // s (watched) after the smile is complete, then a flicker or swell takes her
 const SOB_FADE = 3.5;           // s for the sobbing to fade when nobody looked
 const SOB_SCALE = 0.85, SOB_LOCAL = [0, -0.21, 0.065]; // her plane in the window group: scale, x/y/z (sits on the open gap's floor)
 const WRAITH_BEARING = [62, 78]; // deg off the gaze where it starts (outside the view cone, so it drifts in from the side)
-const WRAITH_DIST = [15, 30];    // m from the player
-const WRAITH_SPEED = [2, 4];     // m/s across the path
-const WRAITH_TIME = [3, 6];      // s, also the sigh's length
+const WRAITH_DIST = [10, 20];    // m from the player (the fog is thick here: any further and it is only a smudge)
+const WRAITH_TIME = [4, 6];      // s, also the sigh's length
+const WRAITH_END = [0, 14];      // deg off the gaze where it ends up (it sweeps in from the periphery to nearly dead ahead, so the view cone is crossed)
 const WRAITH_GAZE_MAX = 1.0;     // s of looking at it and it is gone
-const WRAITH_FOG_GAIN = 1.4;     // opacity = this * fog transmission squared (nearly gone at the edge of visibility)
+const WRAITH_FOG_GAIN = 1.8;     // opacity = this * fog transmission squared (nearly gone at the edge of visibility)
 const CROSS_ANGLE = [30, 48];    // deg off the gaze where a crosser may start (peripheral, still on a 16:9 screen; never inside the gaze cone)
 const CROSS_DIST = [9, 26];      // m from the player
 const CROSS_GAZE_DEG = 24;       // the gaze swings this close to it and it is gone that frame
@@ -164,6 +168,15 @@ export function createApparitions(game, host) {
         A.noiseBurst(out, t + 0.1, { type: 'highpass', freq: 2600, attack: 0.4, dur: 0.7, gain: 0.07 });
         A.tone(out, t, { freq: 92, freqEnd: 70, type: 'sawtooth', attack: 0.45, dur: 0.9, gain: 0.04, lp: 220 });
       }, 2.2);
+    },
+    'sob-creak'(pos = ring(2, 3, 1.2)) { // her body twisting round: cloth dragged, a bone creak, two dry cracks
+      A.playAt(pos, (c, out, t) => {
+        A.noiseBurst(out, t, { type: 'bandpass', freq: 2600, q: 0.9, attack: 0.08, dur: 0.32, gain: 0.25 });
+        A.tone(out, t, { freq: 150, freqEnd: 95, type: 'sawtooth', attack: 0.12, dur: 0.42, gain: 0.06, lp: 380 });
+        A.tone(out, t + 0.05, { freq: 232, freqEnd: 150, type: 'sawtooth', attack: 0.1, dur: 0.3, gain: 0.03, lp: 520 });
+        A.noiseBurst(out, t + 0.09, { type: 'bandpass', freq: 1500, q: 6, dur: 0.02, gain: 0.5 });
+        A.noiseBurst(out, t + 0.21, { type: 'bandpass', freq: 1100, q: 6, dur: 0.02, gain: 0.4 });
+      }, 1.2);
     },
     'sob-sting'(pos = ring(2, 3, 1.2)) { // the sobbing woman's head comes round: a hard intake, a thump, a bowed dissonant pair (restrained)
       A.playAt(pos, (c, out, t) => {
@@ -280,7 +293,7 @@ export function createApparitions(game, host) {
     hand.position.set(CREATURE_EDGE - CREATURE_LAT - 0.25, 1.25, CREATURE_DEPTH + 0.8); hand.renderOrder = 2;   // right edge on the stone's edge, just in front of its face
     const E = T.eyesTex();
     const em = mat(E.tex, { blending: THREE.AdditiveBlending, fog: false, opacity: 0 });
-    const eyes = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.45), em); eyes.position.set(0.09, 1.70, 0.03); eyes.rotation.z = -0.21; eyes.renderOrder = 3;   // on the skull
+    const eyes = new THREE.Mesh(new THREE.PlaneGeometry(0.50, 0.125), em); eyes.position.set(-0.29, 1.70, 0.03); eyes.rotation.z = -0.21; eyes.renderOrder = 3;   // on the skull
     grp.add(body, hand, eyes); scene.add(grp);
     let hold = 0, isNoticed = false, step = -1, cover = null;
     const seat = (a, out) => { // behind the cover, offset toward the path side
@@ -370,10 +383,11 @@ export function createApparitions(game, host) {
   };
   const surfNow = () => (P.surfaceAt(player.s) === 'cobble' ? 'cobble' : player.zone === 'estate' ? 'gravel' : 'dirt');
 
-  // ---- 1. the weeping angel: lives behind the player on the lane, closer each time you look back --------------------
-  // `gap` is how far behind the player it stands. While it is unobserved it keeps pace (re-seated at `gap` every frame); the moment
-  // it is observed it freezes where it is. Unobserved for ANGEL_STEP_AFTER s after having been seen, it takes the next pose
-  // (a closer gap) before you look again. A look held too long is taken away by a flicker, and it moves on during the blink.
+  // ---- 1. the weeping angel: stands in the lane AHEAD of the player (nobody looks back), closer each time the look is broken ----
+  // `gap` is how far ahead of the player it stands. While it is unobserved it keeps pace (re-seated at `gap` every frame); the moment
+  // it is observed it freezes where it is (and the player closes on it). Unobserved for ANGEL_STEP_AFTER s after having been seen, it takes
+  // the next pose (a closer gap) before you look again. A look held too long is taken away by a flicker, and it moves on during the blink.
+  // It first appears the same way, while the lane is dark: a blink, then it is standing there.
   R.angel = (() => {
     const maps = [0, 1, 2, 3].map((i) => T2(`angel_${i}`));
     const m = mat(maps[0], { opacity: 1 });
@@ -382,13 +396,13 @@ export function createApparitions(game, host) {
     const S = { on: false, phase: 'off', result: '', gap: 0, pose: 0, lat: 0, cue: 0, age: 0, seenT: 0, seen: false, unobs: 0, dwell: 0, arm: false, leaving: false, leaveT: 0 };
     const pos = new V3(), pt = new V3();
     const seat = () => {
-      const p = P.pointAt(player.s - S.gap), lim = Math.max(0.2, P.halfWidth(p.s) - 0.45), lat = clamp(S.lat, -lim, lim);
+      const p = P.pointAt(player.s + S.gap), lim = Math.max(0.2, P.halfWidth(p.s) - 0.45), lat = clamp(S.lat, -lim, lim);
       pos.set(p.x + p.rx * lat, 0, p.z + p.rz * lat); grp.position.copy(pos); pt.set(pos.x, 1.0, pos.z);
     };
     const end = (why) => { grp.visible = false; S.on = false; S.phase = 'off'; S.result = why; host.log(`angel:${why}`); };
     const advance = () => {
       S.pose = Math.min(S.pose + 1, ANGEL_GAPS.length - 1);
-      S.gap = ANGEL_GAPS[S.pose] + (S.pose === ANGEL_GAPS.length - 1 ? 0 : rnd(-ANGEL_JITTER, ANGEL_JITTER));
+      S.gap = Math.max(ANGEL_MIN_DIST + 0.3, Math.min(ANGEL_GAPS[S.pose] + (S.pose === ANGEL_GAPS.length - 1 ? 0 : rnd(-ANGEL_JITTER, ANGEL_JITTER)), S.gap - 0.8));   // closer than where it stood, however far you walked toward it
       m.map = maps[S.pose]; Object.assign(S, { seen: false, seenT: 0, unobs: 0, dwell: 0, arm: false });
       seat(); snd['stone-scrape']({ x: pos.x, y: 0.3, z: pos.z }); host.tension(0.04); host.log('angel:closer');
     };
@@ -396,7 +410,7 @@ export function createApparitions(game, host) {
       get busy() { return S.on; }, get result() { return S.result; },
       start() {
         if (S.on) return false;
-        Object.assign(S, { on: true, phase: 'cue', result: '', gap: ANGEL_GAPS[0], pose: 0, lat: rnd(-0.85, 0.85), cue: rnd(...ANGEL_CUE), age: 0, seenT: 0, seen: false, unobs: 0, dwell: 0, arm: false, leaving: false, leaveT: 0 });
+        Object.assign(S, { on: true, phase: 'cue', result: '', gap: ANGEL_GAPS[0], pose: 0, lat: rnd(-0.85, 0.85), cue: rnd(...ANGEL_CUE), age: 0, wait: 0, seenT: 0, seen: false, unobs: 0, dwell: 0, arm: false, leaving: false, leaveT: 0 });
         grp.scale.x = Math.random() < 0.5 ? -1 : 1; m.map = maps[0];   // mirrored or not, the same for all four poses
         seat(); snd['stone-scrape']({ x: pos.x, y: 0.3, z: pos.z });
         return true;
@@ -409,14 +423,18 @@ export function createApparitions(game, host) {
           if ((S.cue -= dt) > 0) return;
           if (S.leaving) return end('missed');
           seat();
-          if (host.observe(pt).obs) return;                         // wait until nobody is looking down the lane
+          const o = host.observe(pt);
+          if (o.obs && !host.denyDark()) {                          // it only appears unseen: if the lane is being watched, a blink makes it so
+            if ((S.wait += dt) > 1.5 && !host.denying()) host.deny(pt, o.d);
+            return;
+          }
           grp.visible = true; S.phase = 'live'; return;
         }
         const dark = host.denyDark(), o = host.observe(pt), obs = o.obs && !dark;
         if (!host.denying()) S.arm = false;
         grp.visible = !dark; faceCamera(grp);
         if (obs) {
-          S.unobs = 0; S.seenT += dt;
+          S.unobs = 0; S.seenT += dt; S.gap = Math.min(S.gap, o.d);   // frozen where it stands, and the walker closes on it
           if (S.seenT > 0.15 && !S.seen) { S.seen = true; host.tension(0.12); }
           S.dwell = host.gaze(o) ? S.dwell + dt : Math.max(0, S.dwell - 2 * dt);
           if (S.leaving) S.leaveT += dt;
@@ -438,7 +456,7 @@ export function createApparitions(game, host) {
     const apex = world.anchors.corners.find((c) => c.id === 'estate-landing-corner'), lamp = world.lamps.find((l) => l.id === apex.lamp);
     const m = mat(T2('ceiling_woman'), { opacity: 0 });
     const piv = new THREE.Group(); piv.position.copy(apex.pos); piv.rotation.set(CEIL_TILT, apex.yaw, 0, 'YXZ');   // yaw to face down the hall, then tilt down; never rolled
-    const body = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 1.3), m); body.position.y = -0.65; body.renderOrder = 1;   // top-centre of the plane at the corner
+    const body = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 2.0), m); body.position.y = -1.0; body.renderOrder = 1; m.color.setScalar(1.35);   // top-centre of the plane at the corner
     piv.add(body); piv.visible = false; scene.add(piv);
     const S = { on: false, phase: 'off', result: '', seen: false, seenT: 0, unobs: 0, dwell: 0, arm: false, leaving: false };
     const end = (why) => { piv.visible = false; S.on = false; S.phase = 'off'; S.result = why; host.log(`ceiling:${why}`); };
@@ -473,25 +491,37 @@ export function createApparitions(game, host) {
   })();
 
   // ---- 3. the sobbing woman at the open lodge window ----------------------------------------------------------------
-  // Sobbing is audible first (audio.sobber, from the beat's start). She is in the dark window from the start, but is only made out
-  // as a gaze dwells on it (the eyes adjust: a fade, not a pop). Watched on, the sobbing stops dead, a beat of silence, the head
-  // snaps round (a hard map swap, the one deliberate change under observation, like the creature's smile), a sting, a short
-  // hold, then she is simply gone. Nobody looks: the sobbing fades after the window and nothing was seen.
+  // Sobbing is audible first (audio.sobber, from the beat's start). She is in the dark window from the start, seen from behind with
+  // a little life (slow breathing, a sway, her shoulders jolting in step with the sobs), but is only made out as a gaze dwells on it
+  // (the eyes adjust: a fade, not a pop). Watched on (or, if you hang about near her, after a time cap) the sobbing stops dead, a beat
+  // of silence, then she turns in two stages (a squash and twist of the plane, then a lunge as she comes round, with a cloth and
+  // bone creak and a sting). She stares: a clear hold with the eyes bright and a slow drift toward you. Then the smile grows (the
+  // creature's eye morph). She is gone only when you look away or a beat after the smile is complete, with a flicker or fog swell,
+  // never mid-stare: the stare and the smile only advance while she is being watched.
   R.sob = (() => {
     const maps = [T2('sob_back'), T2('sob_turn')];
     const m = mat(maps[0], { opacity: 0 });
-    const body = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), m); body.renderOrder = 1; body.scale.setScalar(SOB_SCALE); body.visible = false;
-    const S = { on: false, phase: 'off', result: '', a: null, voice: null, t: 0, limit: 0, dwell: 0, show: 1.2, turn: 2.5, revealed: false, leaving: false, tick: 0 };
+    const haloTex = () => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d'), g = x.createRadialGradient(32, 32, 2, 32, 32, 32); g.addColorStop(0, 'rgba(0,0,0,0.9)'); g.addColorStop(0.55, 'rgba(0,0,0,0.5)'); g.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = g; x.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); };
+    const rig = new THREE.Group(); rig.visible = false;
+    const body = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), m); body.renderOrder = 1; body.scale.setScalar(SOB_SCALE);
+    const hm = mat(haloTex(), { opacity: 0 });   // a dark halo behind her and a contact shadow under her: she sits in the opening, not on it
+    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 1.25), hm), contact = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.24), hm);
+    shadow.position.set(0, 0.02, -0.02); contact.position.set(0, -0.41, -0.012);
+    const E = T.eyesTex(), em = mat(E.tex, { blending: THREE.AdditiveBlending, fog: false, opacity: 0 });
+    const eyes = new THREE.Mesh(new THREE.PlaneGeometry(0.30, 0.075), em); eyes.position.set(0.04, 0.208, 0.004); eyes.renderOrder = 3; body.add(eyes);   // on the painted eyes (plane units)
+    rig.add(shadow, contact, body);
+    const S = { on: false, phase: 'off', result: '', a: null, voice: null, t: 0, life: 0, limit: 0, dwell: 0, near: 0, away: 0, show: 1.2, turn: 2.5, revealed: false, leaving: false, swapped: false, st: 0, sm: 0, hold: 0, step: -1 };
     const gaze = new V3(), vp = new V3();
-    const end = (why) => { S.a.group.remove(body); body.visible = false; S.on = false; S.phase = 'off'; S.result = why; host.log(`sob:${why}`); };
+    const end = (why) => { S.a.group.remove(rig); rig.visible = false; E.draw(0); S.on = false; S.phase = 'off'; S.result = why; host.log(`sob:${why}`); };
     return {
       get busy() { return S.on; }, get result() { return S.result; },
       start(b) {
         if (S.on) return false;
         const a = world.anchors.windows.find((w) => w.id === b.anchor);
         if (!a) return false;
-        Object.assign(S, { on: true, phase: 'sob', result: '', a, t: 0, dwell: 0, show: rnd(...SOB_SHOW), turn: rnd(...SOB_TURN), revealed: false, leaving: false, tick: 0 });
-        a.group.updateWorldMatrix(true, false); a.group.add(body); body.position.set(...SOB_LOCAL); body.visible = true; m.map = maps[0]; m.opacity = 0;
+        Object.assign(S, { on: true, phase: 'sob', result: '', a, t: 0, life: 0, dwell: 0, near: 0, away: 0, show: rnd(...SOB_SHOW), turn: rnd(...SOB_TURN), revealed: false, leaving: false, swapped: false, st: 0, sm: 0, hold: 0, step: -1 });
+        a.group.updateWorldMatrix(true, false); a.group.add(rig); rig.position.set(...SOB_LOCAL); rig.visible = true; m.map = maps[0]; m.opacity = hm.opacity = em.opacity = 0;
+        body.scale.setScalar(SOB_SCALE); body.rotation.set(0, 0, 0); E.draw(0);
         gaze.set(...SOB_LOCAL).applyMatrix4(a.group.matrixWorld);
         vp.copy(a.interior).addScaledVector(a.normal, -0.5).setY(1.1);   // the voice comes from inside the room
         S.voice = A.sobber(vp);
@@ -500,28 +530,64 @@ export function createApparitions(game, host) {
       release() { S.leaving = true; },
       update(dt) {
         if (!S.on) return;
-        S.t += dt;
-        const o = host.observe(gaze), inRange = o.d >= SOB_RANGE[0] && o.d <= SOB_RANGE[1];
+        S.t += dt; S.life += dt;
+        const o = host.observe(gaze), inRange = o.d >= SOB_RANGE[0] && o.d <= SOB_RANGE[1], see = o.obs && !host.denyDark();
+        S.away = o.obs ? 0 : S.away + dt;
         if (S.phase === 'sob') {
+          const pl = S.voice ? S.voice.pulse() : Math.max(0, Math.sin(S.life * 2.3) * Math.sin(S.life * 0.8 + 1)) ** 2;   // her shoulders jolt with each sob (a slow irregular beat when there is no audio)
+          rig.position.set(SOB_LOCAL[0] + Math.sin(S.life * 0.5) * 0.006 + rnd(-0.002, 0.002) * pl, SOB_LOCAL[1] + 0.009 * pl, SOB_LOCAL[2]);   // a tiny sway; the shudder
+          body.scale.set(SOB_SCALE, SOB_SCALE * (1 + 0.014 * Math.sin(S.life * 1.4) - 0.02 * pl), 1);                                          // slow breathing
+          body.rotation.z = Math.sin(S.life * 0.37) * 0.012 + 0.014 * pl * Math.sin(S.life * 38);
           S.dwell = inRange && host.gaze(o) ? S.dwell + dt : Math.max(0, S.dwell - 2 * dt);
-          if (S.dwell >= S.show) S.revealed = true;
+          S.near = inRange && o.obs ? S.near + dt : S.near;
+          if (S.dwell >= S.show || (S.near >= SOB_NEAR_CAP - 3 && see)) S.revealed = true;
           m.opacity = S.revealed ? Math.min(1, m.opacity + dt * 2.5) : 0;
-          if ((S.tick -= dt) <= 0) { S.tick = 0.08; body.position.set(SOB_LOCAL[0] + rnd(-0.003, 0.003), SOB_LOCAL[1] + rnd(-0.003, 0.003), SOB_LOCAL[2]); }   // the shaking of her shoulders
-          if (S.revealed && S.dwell >= S.turn) {
+          hm.opacity = m.opacity * 0.75;
+          if (S.revealed && m.opacity >= 1 && (S.dwell >= S.turn || S.near >= SOB_NEAR_CAP)) {
             if (S.voice) S.voice.stop(); S.voice = null;                              // stops dead
-            body.position.set(...SOB_LOCAL); S.phase = 'silence'; S.t = 0; S.limit = rnd(...SOB_SILENCE);
+            rig.position.set(...SOB_LOCAL); body.scale.setScalar(SOB_SCALE); body.rotation.set(0, 0, 0);
+            S.phase = 'silence'; S.t = 0; S.limit = rnd(...SOB_SILENCE);
           } else if (S.leaving) {
             if (S.voice) S.voice.fade(SOB_FADE); S.voice = null;
             if (!S.revealed || !o.obs) end('faded');
           }
-        } else if (S.phase === 'silence') {
+        } else if (S.phase === 'silence') {                                              // a beat of dead stillness
           if (S.t >= S.limit) {
-            m.map = maps[1]; m.opacity = 1; snd['sob-sting'](vp); host.tension(0.25); host.log('sob:turn');   // the head snaps round
-            S.phase = 'turned'; S.t = 0; S.limit = rnd(...SOB_HOLD);
+            S.phase = 'twist'; S.t = 0; S.swapped = false;
+            snd['sob-creak'](vp); host.tension(0.25); host.log('sob:turn');
           }
-        } else if (S.t >= S.limit) end('turned');                                    // then simply gone (a cut)
+        } else if (S.phase === 'twist') {                                                // stage 1: the body twists edge-on; stage 2: it comes round with a lunge
+          const k1 = clamp(S.t / SOB_TWIST[0], 0, 1), k2 = clamp((S.t - SOB_TWIST[0]) / SOB_TWIST[1], 0, 1);
+          if (S.t >= SOB_TWIST[0] && !S.swapped) { S.swapped = true; m.map = maps[1]; snd['sob-sting'](vp); }
+          const e1 = k1 * k1 * (3 - 2 * k1), e2 = 1 - (1 - k2) ** 3, lunge = 1 + 0.14 * Math.min(1, S.t / 0.34);
+          body.rotation.y = S.swapped ? -0.4 * (1 - e2) : 0.95 * e1;
+          body.scale.set(SOB_SCALE * lunge * (S.swapped ? 0.45 + 0.55 * e2 + 0.06 * Math.sin(Math.PI * k2) : 1 - 0.55 * e1), SOB_SCALE * lunge, 1);
+          rig.position.z = SOB_LOCAL[2] + 0.02 * Math.min(1, S.t / 0.34);
+          if (S.t >= SOB_TWIST[0] + SOB_TWIST[1]) { S.phase = 'stare'; S.t = 0; S.st = 0; S.limit = rnd(...SOB_STARE); body.rotation.y = 0; }
+        } else {                                                                         // stare, smile, after: time only counts while she is watched
+          const w = see ? dt : 0;
+          if (S.phase !== 'leave') em.opacity = Math.min(1, em.opacity + dt * 3);          // the eyes widen and brighten and stay steady
+          if (S.phase === 'stare') {
+            S.st += w; const k = clamp(S.st / S.limit, 0, 1);
+            rig.position.z = SOB_LOCAL[2] + 0.02 + 0.03 * k;                               // a slow drift toward you
+            body.scale.setScalar(SOB_SCALE * (1.14 - 0.08 * clamp(S.t / 0.8, 0, 1) + 0.02 * k));
+            if (S.st >= S.limit) { S.phase = 'smile'; S.sm = 0; }
+          } else if (S.phase === 'smile') {
+            S.sm += w; const k = Math.round(clamp(S.sm / SOB_SMILE, 0, 1) * 32);
+            if (k !== S.step) { S.step = k; E.draw(k / 32); }
+            if (S.sm >= SOB_SMILE) { S.phase = 'after'; S.hold = 0; }
+          } else if (S.phase === 'after') {
+            if (!o.obs) return end('gone');                                                // looked away: simply gone
+            if ((S.hold += dt) >= SOB_AFTER) S.phase = 'leave';
+          } else {                                                                         // still watched a beat after the smile: a flicker or fog swell takes the look
+            S.hold += dt;
+            if (host.denyDark() || !o.obs || S.hold > SOB_AFTER + 4) return end('turned');
+            if (!host.denying()) host.deny(gaze, o.d);
+          }
+          if (S.away > 25 || (S.leaving && S.away > 3)) return end('left');
+        }
       },
-      status: () => `${S.phase} dwell ${S.dwell.toFixed(1)}${S.revealed ? ' shown' : ''}`,
+      status: () => `${S.phase} dwell ${S.dwell.toFixed(1)}${S.revealed ? ' shown' : ''} st ${S.st.toFixed(1)} sm ${S.sm.toFixed(1)}`,
     };
   })();
 
@@ -529,16 +595,16 @@ export function createApparitions(game, host) {
   R.wraith = (() => {
     const m = mat(T2('wraith'), { opacity: 0 });
     const body = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 2.6), m); body.renderOrder = 1; body.visible = false; scene.add(body);
-    const S = { on: false, result: '', x: 0, z: 0, vx: 0, vz: 0, y: 1.6, t: 0, dur: 4, dwell: 0, gone: 0, sigh: null };
+    const S = { on: false, result: '', x: 0, z: 0, fx: 1, fz: 0, a0: 0, a1: 0, d: 15, y: 1.6, t: 0, dur: 4, dwell: 0, gone: 0, sigh: null };
     const end = (why) => { body.visible = false; S.on = false; S.result = why; host.log(`wraith:${why}`); };
     return {
       get busy() { return S.on; }, get result() { return S.result; },
       start() {
         if (S.on) return false;
         const f = fwdH(), sgn = Math.random() < 0.5 ? -1 : 1, a = rnd(...WRAITH_BEARING) * D2R * sgn, c = Math.cos(a), s = Math.sin(a);
-        const d = rnd(WRAITH_DIST[0], Math.min(WRAITH_DIST[1], Math.max(WRAITH_DIST[0], 1.3 / scene.fog.density)));   // thick fog (the gate) brings it nearer, or nothing would show
-        const rx = f.x * c - f.z * s, rz = f.x * s + f.z * c, v = rnd(...WRAITH_SPEED);   // starts outside the view cone and drifts across toward the gaze
-        Object.assign(S, { on: true, result: '', x: camera.position.x + rx * d, z: camera.position.z + rz * d, vx: sgn * rz * v, vz: -sgn * rx * v, y: rnd(1.5, 1.8), t: 0, dur: rnd(...WRAITH_TIME), dwell: 0, gone: 0 });
+        const d = rnd(WRAITH_DIST[0], Math.min(WRAITH_DIST[1], Math.max(WRAITH_DIST[0], 1.0 / scene.fog.density)));   // thick fog (the gate) brings it nearer, or nothing would show
+        const rx = f.x * c - f.z * s, rz = f.x * s + f.z * c;   // starts outside the view cone and sweeps across toward the gaze (bearings are about the heading it appeared in)
+        Object.assign(S, { on: true, result: '', x: camera.position.x + rx * d, z: camera.position.z + rz * d, fx: f.x, fz: f.z, a0: a, a1: sgn * rnd(...WRAITH_END) * D2R, d, y: rnd(1.5, 1.8), t: 0, dur: rnd(...WRAITH_TIME), dwell: 0, gone: 0 });
         S.sigh = A.sigh({ x: S.x, y: S.y, z: S.z }, S.dur);
         body.scale.x = sgn; body.visible = true; m.opacity = 0; body.position.set(S.x, S.y, S.z);
         return true;
@@ -546,7 +612,9 @@ export function createApparitions(game, host) {
       release() {},
       update(dt) {
         if (!S.on) return;
-        S.t += dt; S.x += S.vx * dt; S.z += S.vz * dt;
+        S.t += dt;
+        const k = clamp(S.t / S.dur, 0, 1), e = k * k * (3 - 2 * k), aa = S.a0 + (S.a1 - S.a0) * e, ca = Math.cos(aa), sa = Math.sin(aa), dd = S.d * (1 - 0.2 * e);
+        S.x = camera.position.x + (S.fx * ca - S.fz * sa) * dd; S.z = camera.position.z + (S.fx * sa + S.fz * ca) * dd;
         body.position.set(S.x, S.y, S.z); faceCamera(body); body.rotation.z = Math.sin(S.t * 0.9) * 0.04;
         if (S.sigh) S.sigh.move(S.x, S.y, S.z);
         const o = host.observe(body.position), tr = fogTr(o.d);
@@ -554,7 +622,7 @@ export function createApparitions(game, host) {
         S.dwell = o.obs && host.gaze(o) ? S.dwell + dt : Math.max(0, S.dwell - 2 * dt);
         if (S.dwell > WRAITH_GAZE_MAX || o.d < WRAITH_DIST[0] - 3) S.gone += dt;   // gazed at (or too near): gone within a quarter second, for good
         const fade = clamp(S.t / 1.2, 0, 1) * clamp((S.dur - S.t) / 0.8, 0, 1) * (1 - clamp(S.gone / 0.25, 0, 1));
-        m.opacity = clamp(WRAITH_FOG_GAIN * tr * tr, 0, 0.85) * fade;
+        m.opacity = clamp(WRAITH_FOG_GAIN * tr * tr, 0, 0.75) * fade;
         if (S.gone > 0.25) end('gazed');
       },
       status: () => `${S.t.toFixed(1)}/${S.dur.toFixed(1)}s dwell ${S.dwell.toFixed(1)} op ${m.opacity.toFixed(2)}`,

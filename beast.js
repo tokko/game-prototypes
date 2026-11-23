@@ -1,4 +1,4 @@
-// The fleshbeast: one fused pile of pale bodies (assets/fleshbeast.glb) that scuttles through the dark in
+// The fleshbeast: one fused pile of pale bodies (assets/fleshbeast_anim.glb, skinned clips; fleshbeast.glb is the static fallback) that scuttles through the dark in
 // stop-start bursts. It is never fought and never catches the player; it keeps MIN_DIST away, is seen only
 // in part (lamp-light edge, fog, behind walls, banks and corners), and bolts or vanishes in a flicker when
 // stared at. The director (director.js) starts a SCRIPT from a beat and lends this module its "observed"
@@ -12,7 +12,12 @@ import * as P from './path.js';
 
 // ===== TUNING ==========================================================================================
 export const BEAST = {
-  MODEL: './assets/fleshbeast.glb',   // 3.07 m deep, 2.5 m wide, 1.77 m high raw; origin at ground centre, front +Z
+  MODEL_ANIM: './assets/fleshbeast_anim_v6.glb',   // skinned, clips idle_writhe / skitter / lunge / thrash (30 fps)
+  FADE: 0.25,                 // s crossfade between clips
+  SKITTER_SPEED: 2.5,         // model-units/s the skitter clip's planted feet slide back; timeScale = world speed / (this * scale)
+  CLOSE_THRASH: 5,            // m, thrash when this close to the camera
+  ANIM_WRITHE: 1 / 3,         // factor on ROLL / SHIVER when the clips drive the body
+  MODEL: './assets/fleshbeast.glb',   // fallback (static mesh, old behaviour): 3.07 m deep, 2.5 m wide, 1.77 m high raw; origin at ground centre, front +Z
   SCALE: 0.68,                // outdoors: about 2.1 m deep, 1.7 m wide
   SCALE_TIGHT: 0.5,           // in the hall and corridor (half width 1.15 m)
   TICK_HZ: [10, 14],          // transform / logic tick rate (random per tick)
@@ -114,9 +119,13 @@ export function createBeast(game, host) {
   let loaded = false;
 
   // ---- model: one mesh, one material; vertex shader adds a slow writhing roll and a faint shiver ----------
-  new GLTFLoader().load(K.MODEL, (gltf) => {
+  // Preferred: skinned GLB with clips driven by an AnimationMixer. Fallback: the old static GLB, code-driven.
+  let mixer = null, actions = {}, cur = null;
+  function onModel(gltf, animated) {
+    const wk = animated ? K.ANIM_WRITHE : 1;
     gltf.scene.traverse((o) => {
       if (!o.isMesh) return;
+      if (animated) o.frustumCulled = false;   // bounds come from the bind pose
       const m = o.material;
       m.emissive.set(0xffffff); m.emissiveMap = m.map; m.emissiveIntensity = K.GLOW;
       m.onBeforeCompile = (sh) => {
@@ -124,18 +133,33 @@ export function createBeast(game, host) {
         sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
           float roll = 0.5 * sin(position.x * 2.3 + position.z * 1.7 + uTime * 0.8) + 0.5 * sin(position.y * 3.1 + position.z * 2.2 - uTime * 0.6);
           float shiv = sin(dot(position, vec3(31.0, 27.0, 35.0)) + uTime * 23.0);
-          transformed += normal * (roll * ${K.ROLL.toFixed(4)} + shiv * ${K.SHIVER.toFixed(4)});
-          transformed.xz += vec2(-position.z, position.x) * 0.02 * sin(uTime * 0.5 + position.y * 2.0);`);
+          transformed += normal * (roll * ${(K.ROLL * wk).toFixed(4)} + shiv * ${(K.SHIVER * wk).toFixed(4)});
+          transformed.xz += vec2(-position.z, position.x) * ${(0.02 * wk).toFixed(4)} * sin(uTime * 0.5 + position.y * 2.0);`);
       };
-      m.customProgramCacheKey = () => 'fleshbeast-writhe';
+      m.customProgramCacheKey = () => (animated ? 'fleshbeast-writhe-skin' : 'fleshbeast-writhe');
     });
+    if (animated) {
+      mixer = new THREE.AnimationMixer(gltf.scene);
+      for (const n of ['idle_writhe', 'skitter', 'lunge', 'thrash']) {
+        const c = THREE.AnimationClip.findByName(gltf.animations, n);
+        if (c) actions[n] = mixer.clipAction(c);
+      }
+      if (actions.lunge) { actions.lunge.setLoop(THREE.LoopOnce, 1); actions.lunge.clampWhenFinished = true; }
+    }
     root.add(gltf.scene); loaded = true;
-  }, undefined, (e) => console.warn('fleshbeast model failed to load', e));
+  }
+  function loadFallback(why) {
+    console.warn('fleshbeast animated model unavailable (' + why + '); using static model');
+    new GLTFLoader().load(K.MODEL, (gltf) => onModel(gltf, false), undefined, (e) => console.warn('fleshbeast model failed to load', e));
+  }
+  new GLTFLoader().load(K.MODEL_ANIM, (gltf) => {
+    if (gltf.animations?.length) onModel(gltf, true); else loadFallback('no animations');
+  }, undefined, (e) => loadFallback(e?.message || e));
 
   // ---- state ------------------------------------------------------------------------------------------
   const S = { mode: 'off', script: null, ai: 0, act: null, t: 0, u: { s: 0, lat: 0, y: 0 }, n: new V3(0, 0, 1), nT: new V3(0, 0, 1),
     h: new V3(1, 0, 0), timer: 0, burst: null, shown: false, vis: false, d: 99, dwell: 0, limit: 2, yaw: 0, phase: 0, tickT: 0, acc: 0,
-    tw: new V3(), twYaw: 0, twTilt: 0, spawnT: 0, fleeT: 0, deniedT: 0, closing: false, seen: false, mirror: 1, choir: null, sgn: 1 };
+    tw: new V3(), twYaw: 0, twTilt: 0, speed: 0, lungeT: 0, lunged: false, spawnT: 0, fleeT: 0, deniedT: 0, closing: false, seen: false, mirror: 1, choir: null, sgn: 1 };
   // n and h are (s, lat, up) vectors in the path frame.
   const q = new THREE.Quaternion(), qt = new THREE.Quaternion(), mat = new THREE.Matrix4(), eu = new THREE.Euler();
   const W = new V3(), nW = new V3(), fW = new V3(), xW = new V3(), tV = new V3(), rV = new V3(), uV = new V3(0, 1, 0), tmp = new V3();
@@ -180,15 +204,31 @@ export function createBeast(game, host) {
     fW.set(0, S.h.z, 0).addScaledVector(tV, S.h.x).addScaledVector(rV, S.h.y);
     fW.addScaledVector(nW, -fW.dot(nW));
     if (fW.lengthSq() < 0.01) fW.copy(tV).addScaledVector(nW, -tV.dot(nW));
-    fW.normalize().applyAxisAngle(nW, S.yaw + S.twYaw);
+    fW.normalize().applyAxisAngle(nW, S.yaw + (mixer ? 0 : S.twYaw));
     xW.crossVectors(nW, fW);
     mat.makeBasis(xW, nW, fW); q.setFromRotationMatrix(mat);
-    const step = Math.sin(S.phase * Math.PI);
-    eu.set(S.twTilt + (moving ? Math.cos(S.phase * Math.PI * 0.5) * K.TILT * 0.5 : 0), 0, moving ? step * K.TILT : S.twTilt * 0.5);
+    const step = Math.sin(S.phase * Math.PI), j = mixer ? 0 : 1;   // with clips, stepped bob / tilt / twitch would duplicate the animation
+    eu.set(j * (S.twTilt + (moving ? Math.cos(S.phase * Math.PI * 0.5) * K.TILT * 0.5 : 0)), 0, j * (moving ? step * K.TILT : S.twTilt * 0.5));
     q.multiply(qt.setFromEuler(eu));
     root.quaternion.copy(q);
-    root.position.copy(W).addScaledVector(nW, (moving ? Math.abs(step) * K.BOB : 0) + S.tw.y).addScaledVector(xW, S.tw.x).addScaledVector(fW, S.tw.z);
+    root.position.copy(W).addScaledVector(nW, (moving ? Math.abs(step) * K.BOB * j : 0) + S.tw.y * j).addScaledVector(xW, S.tw.x * j).addScaledVector(fW, S.tw.z * j);
     root.scale.setScalar(interior(S.u.s) ? K.SCALE_TIGHT : K.SCALE);
+    if (mixer) pose(moving);
+  }
+  // ---- clips: idle/hold -> idle_writhe, bursts/flee -> skitter (timeScale from real speed), reacting or close -> thrash,
+  // first burst of a rush -> lunge once (then back to whatever the state calls for) ---------------------------
+  function play(name, ts) {
+    const a = actions[name] || actions.idle_writhe;
+    if (!a) return;
+    if (a === cur) { if (name === 'skitter') a.timeScale = ts; return; }
+    a.reset(); a.timeScale = ts; a.play();
+    if (cur) cur.crossFadeTo(a, K.FADE, false);
+    cur = a;
+  }
+  function pose(moving) {
+    if (S.lungeT > 0) return play('lunge', 1);
+    if (moving) return play('skitter', S.speed / (K.SKITTER_SPEED * root.scale.x));
+    play(S.mode === 'denied' || S.mode === 'freeze' || S.d < K.CLOSE_THRASH ? 'thrash' : 'idle_writhe', 1);
   }
   const setShown = (on) => { S.shown = on; root.visible = on && loaded; };
 
@@ -219,7 +259,7 @@ export function createBeast(game, host) {
   function beginAct() {
     const A = S.act = S.script.acts[S.ai];
     if (!A) return end();
-    S.burst = null; S.spawnT = 0; S.timer = 0;
+    S.burst = null; S.spawnT = 0; S.timer = 0; S.lunged = false;
     if (A.a === 'ghost') { setShown(false); S.mode = 'ghost'; S.timer = A.t; }
     else if (A.a === 'spawn') S.mode = 'spawn';
     else if (A.a === 'freeze') { S.mode = 'freeze'; S.timer = range(A.t); S.deniedT = 0; S.denied = false; if (S.choir) S.choir.hush(1.6); }
@@ -236,6 +276,8 @@ export function createBeast(game, host) {
     const z = D > 3 && !fast ? K.ZIGZAG : D > 1.5 ? K.ZIGZAG * 0.3 : 0;
     if (z) dir.applyAxisAngle(tmp.set(0, S.n.y, S.n.z), rand(-z, z));
     const v = fast ? K.BOLT_SPEED : range(A.speed || K.SPEED);
+    S.speed = v;
+    if (A && A.a === 'rush' && !S.lunged) { S.lunged = true; S.lungeT = 1; }
     S.burst = { dir, v, left: Math.min(range(K.BURST_T), (D + 0.4) / v) };
     S.h.copy(dir);
     S.yaw = Math.random() < K.SIDEWAYS_CHANCE ? [1.3, -1.3, Math.PI][(Math.random() * 3) | 0] : 0;
@@ -276,7 +318,7 @@ export function createBeast(game, host) {
 
   // ---- one tick -----------------------------------------------------------------------------------------
   function tick(h) {
-    S.t += h;
+    S.t += h; S.lungeT = Math.max(0, S.lungeT - h);
     if (!S.closing && (player.s > S.script.s1 || S.t > S.script.maxT)) { S.closing = true; if (!S.shown) return end(); }
     const A = S.act, pu = playerU();
     let moving = false;
@@ -327,6 +369,7 @@ export function createBeast(game, host) {
 
   function update(dt) {
     uniforms.uTime.value += dt;
+    if (mixer && root.visible) mixer.update(dt);
     if (S.mode === 'off') return;
     S.acc += dt;
     if (S.acc >= S.tickT) { const h = S.acc; S.acc = 0; S.tickT = 1 / range(K.TICK_HZ); tick(h); }

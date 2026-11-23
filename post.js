@@ -38,9 +38,9 @@ const GradeShader = {
     }`,
 };
 
-export function createPost(renderer, scene, camera) {
+export function createPost(renderer, scene, camera, samples = 4) {
   const size = renderer.getSize(new THREE.Vector2());
-  const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
+  const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples });
   const composer = new EffectComposer(renderer, target);
   composer.addPass(new RenderPass(scene, camera));
   const grade = new ShaderPass(GradeShader);
@@ -54,6 +54,7 @@ export function createPost(renderer, scene, camera) {
   setSize(size.x, size.y);
   return {
     composer, uniforms: grade.uniforms, setSize,
+    setPixelRatio(pr) { composer.setPixelRatio(pr); },   // call after renderer.setPixelRatio, then setSize
     render(t) { grade.uniforms.time.value = t; composer.render(); },
   };
 }

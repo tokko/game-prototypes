@@ -783,8 +783,8 @@ export function buildWorld(scene) {
     f(box(0.2, 0.3, 0.2), M.iron, -3.0, 3.28, -(lz + 1.4));
     landingHead = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.2, 0.16), M.lampOff); landingHead.position.copy(world(frame(DS), -3.0, 3.5, -(lz + 1.4))); scene.add(landingHead);
     landingLamp.pos.copy(landingHead.position); landingLamp.halo.position.copy(landingHead.position);
-    { const pd = P.pointAt(DS);   // the landing's upper corner beside the lamp (the ceiling woman crouches here), plane faces along the path toward the corridor, where you look back from
-      anchors.corners.push({ id: 'estate-landing-corner', zone: 'estate', pos: world(frame(DS), -3.4, 4.3, -13.3), yaw: Math.atan2(pd.tx, pd.tz), lamp: 'estate-landing-lamp' }); }
+    { const pd = P.pointAt(DS);   // the landing's upper corner beside the lamp (the ceiling woman crouches here), plane faces back along the path toward the front door, where you come in from
+      anchors.corners.push({ id: 'estate-landing-corner', zone: 'estate', pos: world(frame(DS), -3.4, 4.3, -13.3), yaw: Math.atan2(-pd.tx, -pd.tz), lamp: 'estate-landing-lamp' }); }
     // hall: doors in the right wall, a dead chandelier above the lamp, a hall table
     for (const z of [-5.5, -9.5]) f(pg(1.3, 2.6), M.door, 2.93, 1.3, z, -Math.PI / 2);
     f(unitCyl, M.iron, 0, 3.3, -3.6, 0, 0.02, 1.1, 0.02); f(unitCone, M.iron, 0, 3.15, -3.6, 0, 0.5, 0.25, 0.5); f(box(0.18, 0.18, 0.18), M.lampHead, 0, 3.4, -3.6);

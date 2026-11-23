@@ -1,0 +1,9 @@
+samples 882000 dur s 40.0 peak 0.244 rms 0.0180
+onsets 66 intervals 1.05 0.85 0.9 0.55 0.63 0.13 0.16 0.14 0.12 0.22 2.68 0.56 0.39 0.65 0.53 0.21 0.19 0.26 0.26 3.42 0.97 0.77 0.47 0.17 0.14 0.15 0.17 0.15 1.42 0.15 0.15 0.86 0.89 0.95 0.69 0.92 0.26 0.33 2.26 0.9 0.9 0.54 0.15 2.43 0.14 0.18 0.98 0.73 0.37 0.74 0.57 0.19 0.17 0.19 0.13 0.17 1.25 0.26 0.09 0.62 0.25 0.58 0.38 0.19 0.32
+interval mean 0.60 sd 0.64 CV 1.06 distinct 47 / 65
+envelope autocorr max (0.3-4 s lag) 0.26 at 0.94 s
+loudest frame at 37.48 s  energy %: <300 7.5 300-1000 65.7 1-2k 10.2 2-4k 15.5 4-8k 1.2
+strongest low peak (f0 candidate) 264 Hz
+harmonic-peak / valley energy (dB) 11.4 (0 = pure noise, >25 = clean tone)
+spectral peaks >500 Hz (Hz, dB re f0) 522:-5 549:-11 571:-18 592:-7 635:-10 651:-13 673:-8 684:-9 700:-8 727:-6 748:-2 770:2 791:7 813:-2 824:-4 845:-6 861:-12 872:-13
+fraction of time below 12% of max env: 0.68

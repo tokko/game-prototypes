@@ -243,12 +243,14 @@ export function streak() {
 
 // ---- apparition billboards (transparent, dark, low contrast) -------------------------------
 
-// Painted PNGs from assets/apparitions/ (see SPEC.md there): straight alpha, sRGB, clamp wrap, mipmaps.
+// Painted PNGs from assets/refmatch/apparitions/ (repainted to match the reference collage; originals remain in assets/apparitions/ and assets/round2/) (see SPEC.md there): straight alpha, sRGB, clamp wrap, mipmaps.
 const apparitionCache = {};
+const apparitionRefmatchKeys = new Set(['apparitions/figure_stand', 'round2/crosser_window']);
 export function apparitionTex(name, dir = 'apparitions') {
   const key = `${dir}/${name}`;
   if (!apparitionCache[key]) {
-    const t = new THREE.TextureLoader().load(`assets/${key}.png`);
+    const folder = apparitionRefmatchKeys.has(key) ? 'refmatch' : 'refmatch2';
+    const t = new THREE.TextureLoader().load(`assets/${folder}/${key}.png`);
     t.colorSpace = THREE.SRGBColorSpace;
     t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
     t.anisotropy = 4;

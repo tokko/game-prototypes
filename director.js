@@ -106,7 +106,7 @@ export const BEATS = [
   { id: 'angel',            zone: 'village', s: [48, 84],   kind: 'actor', actor: 'angel', tension: 0.03 },                      // behind you in the lane: closer each time you look back
   // forest: a creature to follow, then closer events
   { id: 'lure',             zone: 'forest',  s: [160, 200], kind: 'lure', cue: 'hum', place: 'forest-lantern', every: [8, 12], tension: 0.02 },
-  { id: 'wraith',           zone: 'forest',  s: [160, 182], kind: 'actor', actor: 'wraith', tension: 0.03 },                     // a long sigh through the trees (overlaps only the lure's hum)
+  { id: 'wraith',           zone: 'forest',  s: [166, 182], kind: 'actor', actor: 'wraith', tension: 0.03 },                     // a long sigh through the trees (overlaps only the lure's hum)
   { id: 'fence',            zone: 'forest',  s: [181, 196], kind: 'audio', cue: 'heavy-drag', at: { s: 184, lat: 4.4, y: 0.4 }, tension: 0.1 },
   { id: 'clearing-creature', zone: 'forest', s: [200, 238], kind: 'visual', ev: 'forest-shadow', anchor: 'forest-clearing-stone', cue: 'branch-snap' },
   { id: 'beast-warn',       zone: 'forest',  s: [240, 262], kind: 'beast', script: 'warn' },                    // distant moaning, nothing seen
@@ -115,10 +115,10 @@ export const BEATS = [
   // estate: densest, enclosed
   { id: 'lodge-sobbing',    zone: 'estate',  s: [316, 346], kind: 'actor', actor: 'sob', anchor: 'estate-window-lodge', tension: 0.03 },   // sobbing from the open lodge window; looked at, it stops
   { id: 'courtyard-figure', zone: 'estate',  s: [346, 366], kind: 'visual', ev: 'distant-figure', anchor: 'estate-courtyard-door', cue: 'door-creak' },
-  { id: 'landing-light',    zone: 'estate',  s: [390, 402], kind: 'toggle', toggle: 'landingLamp', value: true, cue: 'click' },
+  { id: 'landing-light',    zone: 'estate',  s: [370, 388], kind: 'toggle', toggle: 'landingLamp', value: true, cue: 'click' },
   { id: 'corridor-door',    zone: 'estate',  s: [402, 414], kind: 'toggle', toggle: 'corridorDoor', value: true },
-  { id: 'corridor-figure',  zone: 'estate',  s: [376, 393], kind: 'visual', ev: 'distant-figure', anchor: 'estate-corridor', cue: 'drag' },
-  { id: 'landing-woman',    zone: 'estate',  s: [390, 410], kind: 'actor', actor: 'ceiling', after: 'landing-light' },            // in the lit corner above the landing, if you look back
+  { id: 'corridor-figure',  zone: 'estate',  s: [387, 399], kind: 'visual', ev: 'distant-figure', anchor: 'estate-corridor', cue: 'drag' },
+  { id: 'landing-woman',    zone: 'estate',  s: [372, 394], kind: 'actor', actor: 'ceiling', after: 'landing-light' },            // in the lit corner above the landing, seen from the hall as you walk in
   { id: 'beast-courtyard',  zone: 'estate',  s: [356, 376], kind: 'beast', script: 'courtyard' },
   { id: 'beast-corridor',   zone: 'estate',  s: [394, 420], kind: 'beast', script: 'corridor', force: true }, // the payoff
 ];
