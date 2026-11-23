@@ -1,0 +1,12 @@
+{
+  "name": "game-prototypes",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "three.js browser game prototypes, published together as one GitHub Pages site",
+  "scripts": {
+    "build": "node scripts/build-site.mjs",
+    "serve": "node scripts/serve.mjs 8080"
+  },
+  "engines": { "node": ">=20" }
+}
