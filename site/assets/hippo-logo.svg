@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="72" height="64" viewBox="0 0 72 64" role="img" aria-labelledby="title">
+  <title id="title">Hippo Studios</title>
+  <g fill="#ffac68">
+    <path d="M13 23C8 22 5 17 5 12c0-4 2-6 5-6 4 0 8 3 10 7 3-4 6-5 10-4 3 1 9 1 12 0 4-1 7 0 10 4 2-4 6-7 10-7 3 0 5 2 5 6 0 5-3 10-8 11l-1 5c6 3 10 9 10 16 0 7-4 12-11 13-6 1-14-2-21-2s-15 3-21 2C8 56 4 51 4 44c0-7 4-13 10-16z"/>
+    <path d="M15 59q4 1 9-1l-2 4q-2 3-5 0zm42 0q-4 1-9-1l2 4q2 3 5 0z" fill="#ffead5"/>
+  </g>
+  <g fill="#10232a">
+    <path d="M18 21q4-4 9-2l-1 3q-4 2-8-1zm36 0q-4-4-9-2l1 3q4 2 8-1z"/>
+    <ellipse cx="20" cy="39" rx="4.7" ry="3.3" transform="rotate(28 20 39)"/>
+    <ellipse cx="52" cy="39" rx="4.7" ry="3.3" transform="rotate(-28 52 39)"/>
+  </g>
+</svg>
