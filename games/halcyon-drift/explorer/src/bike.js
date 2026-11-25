@@ -19,6 +19,7 @@ export class Bike {
     this.air = 0; this.airMax = 0; this.lastAir = 0; this.best = 0;
     this.crashed = 0; this.speed = 0; this.throttle = 0; this.events = [];
     this.lean = 0; this.hasRider = false; this.boost = 100; this.wheelie = false; this.alt = 0;
+    this.groundPitchInput = 0; this.groundRollInput = 0;
   }
   place(x, z, yaw, env) {
     this.q.setFromAxisAngle(new V3(0, 1, 0), -yaw);
@@ -28,6 +29,7 @@ export class Bike {
     const n = env.normal(x, z, [0, 1, 0]);
     const qa = new Q().setFromUnitVectors(new V3(0, 1, 0), new V3(n[0], n[1], n[2]));
     this.q.premultiply(qa);
+    this.groundPitchInput = 0; this.groundRollInput = 0;
   }
   get forward() { return _a.set(0, 0, -1).applyQuaternion(this.q); }
   get yaw() { const f = new V3(0, 0, -1).applyQuaternion(this.q); return Math.atan2(f.x, -f.z); }
@@ -105,9 +107,11 @@ export class Bike {
     }
     // lean / balance (ghost): lateral accel -> lean angle, keeps the bike upright without real roll dynamics
     if (grounded > 0) {
-      const wn = new V3().add(this.wheels[0].contact ? this.wheels[0].n : this.wheels[1].n).normalize();
+      const wn = new V3();
+      for (const wh of this.wheels) if (wh.contact) wn.add(wh.n);
+      wn.normalize();
       const alat = fwdSpeed * fwdSpeed * Math.tan(this.steer) / 1.96;
-      const targetLean = clamp(Math.atan2(alat, 6.5), -0.75, 0.75);
+      const targetLean = clamp(Math.atan2(alat, 9.8), -0.48, 0.48);
       // roll angle relative to surface normal about forward axis
       const upNow = up.clone();
       const side = new V3().crossVectors(fwdV, wn).normalize(); // points to the right? (fwd x n)
@@ -130,6 +134,10 @@ export class Bike {
     if (grounded > 0 && ctl.wheelie) torque.addScaledVector(rightW, 520);
     // air control
     if (grounded === 0) {
+      // A crest should not turn held throttle and steering into a midair stunt.
+      if (ctl.pitch !== this.groundPitchInput) this.groundPitchInput = 0;
+      if (ctl.roll !== this.groundRollInput) this.groundRollInput = 0;
+      ctl = { ...ctl, pitch: this.groundPitchInput ? 0 : ctl.pitch, roll: this.groundRollInput ? 0 : ctl.roll };
       if (Math.abs(this.w.dot(rightW)) < 1.7 || Math.sign(this.w.dot(rightW)) === Math.sign(ctl.pitch)) torque.addScaledVector(rightW, -ctl.pitch * 340);   // W (pitch>0): nose down
       torque.addScaledVector(fwdV, ctl.roll * 300);
       torque.addScaledVector(up, -ctl.yaw * 220);
@@ -145,6 +153,7 @@ export class Bike {
       }
       this.air += dt; this.airMax = Math.max(this.airMax, this.air); this.alt = this.p.y - env.h(this.p.x, this.p.z);
     } else {
+      this.groundPitchInput = ctl.pitch; this.groundRollInput = ctl.roll;
       if (this.air > 0.3) { this.lastAir = this.air; this.events.push({ type: 'land', air: this.air, vy: this.v.y }); if (this.air > this.best) this.best = this.air; }
       this.air = 0;
       // gentle damping of pitch rate on the ground

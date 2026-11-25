@@ -883,7 +883,8 @@ function updateOnFoot(dt) {
 }
 function stepBikeParked(dt) {
   if (!G.bikeOut || G.riding || G.interior) return;
-  const steps = 2; for (let i = 0; i < steps; i++) bike.step(dt / steps, { thr: 0, steer: 0, pitch: 0, roll: 0, yaw: 0, brake: 1, wheelie: false }, surfEnv());
+  const steps = Math.max(1, Math.ceil(dt * 180)), env = surfEnv();
+  for (let i = 0; i < steps; i++) bike.step(dt / steps, { thr: 0, steer: 0, pitch: 0, roll: 0, yaw: 0, brake: 1, wheelie: false }, env);
   bike.applyModel(null);
 }
 function tickWorkers(dt, pos) {
@@ -938,7 +939,8 @@ function updateBike(dt) {
   }
   if (!input.drag && !input.locked) G.cam.off *= Math.pow(0.3, dt);
   const env = surfEnv();
-  const sub = 3; for (let i = 0; i < sub; i++) bike.step(dt / sub, ctlB, env);
+  const sub = Math.max(1, Math.ceil(dt * 180));
+  for (let i = 0; i < sub; i++) bike.step(dt / sub, ctlB, env);
   bike.applyModel(G.riding ? M.astro : null, dt);
   for (const e of bike.events) {
     if (e.type === 'land') {
