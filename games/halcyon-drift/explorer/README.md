@@ -38,7 +38,7 @@ Every HUD button mirrors a key and works; the map has its own buttons (plan, war
 
 Orbit view (`orbit` mode) renders the body as a shader sphere (baked low-res map of the *same* height recipe as the terrain + procedural craters)
 and propagates craft on conics. When a landing craft descends below 14 km (and is falling), the terrain scene is
-pre-warmed from 48 km (terrain origin fixed at the descent point), then a 0.5 s dip-to-black swaps scenes. Position, velocity and
+pre-warmed from 48 km (terrain origin fixed at the descent point). The camera keeps its viewing angle and distance as the terrain takes over. Position, velocity and
 attitude are carried through the local east/up/south frame (`flight.js: orbitToSurface`); the flat-plane physics adds the
 centrifugal term `g_eff = g - v_h^2/R` so the descent trajectory is continuous. Above 16 km an ascent hands back to the orbit view the same way.
 The horizon is curved by a `d^2/2R` vertex-shader drop on terrain, scatter and shadow casters.

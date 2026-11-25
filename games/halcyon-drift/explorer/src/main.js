@@ -378,15 +378,27 @@ function enterSurface(v) {
   v.status = 'surface'; v.docked = false; v.stance = 'vertical'; v.tip = 0; v.tipT = 0; v.numeric = false; v.railed = false;
   if (v.kind === 'lander') { v.rv = null; v.sensorManual = false; for (const k of Object.keys(v.dep)) { v.dep[k] = 0; v.depT[k] = 0; } v.drilling = 0; v.refining = 0; }      // PROSPECTOR: arrives stowed
   s.assist = true; if (ap && ap.type === 'descent') s.ap = 'land';
-  if (aeroEntry) { initAero(v, s, surfEnv()); s.onGround = false; s.gear = 0; s.ap = null; s.throttle = 0.0; s.p.add(_aeroOff.copy(new V3())); hud.toast('Atmospheric flight: fly her down (WASD pitch/roll, Shift/Ctrl throttle). L = runway landing assist', 'info'); G.cam.dist = 30; }
+  if (aeroEntry) { initAero(v, s, surfEnv()); s.onGround = false; s.gear = 0; s.ap = null; s.throttle = 0.0; s.p.add(_aeroOff.copy(new V3())); hud.toast('Atmospheric flight: fly her down (WASD pitch/roll, Shift/Ctrl throttle). L = runway landing assist', 'info'); }
   // keep an upright-ish attitude hint: re-orient smoothly (flight code rotates towards thrust direction)
-  G.sv = v; G.mode = 'flight'; world.active = v; G.cam.dist = v.kind === 'plane' ? 26 : 16; G.cam.pitch = 0.2; G.cam.off = 0;
+  G.sv = v; G.mode = 'flight'; world.active = v;
+  // Orbit camera angles already use the craft's local east, north and up directions.
+  const c = G.cam, offset = c.yaw - heading - Math.PI;
+  c.off = Math.atan2(Math.sin(offset), Math.cos(offset));
+  G.aeroYaw = heading;
+  camTarget.copy(s.p);
+  gfx.camera.position.set(Math.sin(c.yaw) * Math.cos(c.pitch), Math.sin(c.pitch), -Math.cos(c.yaw) * Math.cos(c.pitch))
+    .multiplyScalar(c.dist).add(camTarget);
+  gfx.camera.up.set(0, 1, 0); gfx.camera.lookAt(camTarget);
+  G.camInit = 'flight';
   hideOrbitModels(); sceneS.add(v.model.group);
-  hud.toast('Entering the local surface scene', 'info');
   world.warpIndex = 0; world.warpTo = null;
 }
 function exitSurface(v) {
   const s = v.surf, R = K.R;
+  const offset = gfx.camera.position.clone().sub(camTarget);
+  G.cam.yaw = Math.atan2(offset.x, -offset.z);
+  G.cam.pitch = Math.atan2(offset.y, Math.hypot(offset.x, offset.z));
+  G.cam.dist = offset.length();
   const qm = s.aero ? s.q.clone().multiply(QS_INV) : s.q.clone();
   const o = F.surfaceToOrbit(s.p.x + terrain.origin.x, s.p.y, s.p.z + terrain.origin.z, s.vel, qm, R);
   v.r.copy(o.r); v.v.copy(o.v); v.q.copy(v.kind === 'plane' ? o.q.multiply(QS) : o.q);
@@ -400,7 +412,6 @@ function exitSurface(v) {
   G.descentOrigin = false;
   G.sv = null; G.mode = 'orbit'; sceneS.remove(v.model.group);
   M.astro.group.visible = false;
-  hud.toast('Back in orbit view', 'info');
 }
 function transition(fn, then) {
   if (G.fadeState) return;
@@ -620,7 +631,7 @@ function updateOrbitMode(dt) {
   world.step(dt, ctlO);
   pushWorldMsgs();
   for (const e of world.events.splice(0)) {
-    if (e.type === 'enterSurface' && e.v === world.active) transition(() => enterSurface(e.v));
+    if (e.type === 'enterSurface' && e.v === world.active) enterSurface(e.v);
     if (e.type === 'ascentDone') { world.parkCarrierAhead(e.v); }
     if (e.type === 'docked') { G.cam.dist = 70; }
     if (e.type === 'soi') { /* already toasted */ }
@@ -631,7 +642,7 @@ function updateOrbitMode(dt) {
     if (G.worldId !== v.body && world.groundAlt(v) < 60000) activateWorld(v.body);
     const alt = world.groundAlt(v);
     if (alt < 48000) prewarm(v);
-    if (alt < F.TRANSITION_DOWN && v.v.dot(v.r) < 0 && terrain.pending < 12) transition(() => enterSurface(v));
+    if (alt < F.TRANSITION_DOWN && v.v.dot(v.r) < 0 && terrain.pending < 12) enterSurface(v);
   }
   if (!RECIPES[v.body]) G.descentOrigin = false;
 }
@@ -711,7 +722,7 @@ function updateFlight(dt) {
   // dust
   emitFlightDust(v, dt);
   // transition up
-  if (s.p.y > F.TRANSITION_UP && !G.fadeState) transition(() => exitSurface(v));
+  if (s.p.y > F.TRANSITION_UP || s.events.includes('orbit')) exitSurface(v);
   checkBodyEvents();
   if (s.ap === 'land' && s.landed) { s.ap = null; }
 }
@@ -778,7 +789,6 @@ function flightEvent(v, e) {
   else if (e === 'water' || e === 'splashed') say('Splashdown avoided: the autopilot pulled you out of the water (the craft cannot land on water)', 'warn', true);
   else if (e === 'crash') say('Rough contact: hull damaged, flight recovered at 250 m', 'warn', true);
   else if (e === 'gearup') say('Gear was up! Belly contact: flight recovered at 250 m', 'warn', true);
-  else if (e === 'orbit') { transition(() => exitSurface(v)); }
 }
 function launchToOrbit(v) {
   const s = v.surf;
@@ -1360,7 +1370,7 @@ function frame(now) {
     if (G.mode === 'orbit') {
       updateOrbitMode(dt);
     }
-    if (G.mode === 'flight') updateFlight(dt);
+    else if (G.mode === 'flight') updateFlight(dt);
     else if (G.mode === 'onfoot') updateOnFoot(dt);
     else if (G.mode === 'bike') updateBike(dt);
     else if (G.mode === 'skiff') updateSkiff(dt);      // AETHEL
