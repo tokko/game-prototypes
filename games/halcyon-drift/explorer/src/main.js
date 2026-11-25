@@ -387,8 +387,13 @@ function enterSurface(v) {
   if (aeroEntry) { initAero(v, s, surfEnv()); s.onGround = false; s.gear = 0; s.ap = null; s.throttle = 0.0; s.p.add(_aeroOff.copy(new V3())); hud.toast('Atmospheric flight: fly her down (WASD pitch/roll, Shift/Ctrl throttle). L = runway landing assist', 'info'); }
   // keep an upright-ish attitude hint: re-orient smoothly (flight code rotates towards thrust direction)
   G.sv = v; G.mode = 'flight'; world.active = v;
-  // Orbit camera angles already use the craft's local east, north and up directions.
-  const c = G.cam, offset = c.yaw - heading - Math.PI;
+  const c = G.cam;
+  if (orbitCameraCraft === v) {
+    const local = fToWorld(gfx.camera.position.clone().sub(camTarget), st.lon, st.lat);
+    c.yaw = Math.atan2(local.x, -local.z);
+    c.pitch = Math.atan2(local.y, Math.hypot(local.x, local.z));
+  }
+  const offset = c.yaw - heading - Math.PI;
   c.off = Math.atan2(Math.sin(offset), Math.cos(offset));
   G.aeroYaw = heading;
   camTarget.copy(s.p);
@@ -416,7 +421,7 @@ function exitSurface(v) {
   for (const o of surfaceVessels()) if (o !== v && o.surf && !o.surf.abs) { o.surf.p.x += ox; o.surf.p.z += oz; o.surf.abs = true; }
   if (G.bikeOut && !bike.absSet) { bike.p.x += ox; bike.p.z += oz; bike.absSet = true; }
   G.descentOrigin = false;
-  G.sv = null; G.mode = 'orbit'; sceneS.remove(v.model.group);
+  G.sv = null; G.mode = 'orbit'; orbitCameraCraft = null; sceneS.remove(v.model.group);
   M.astro.group.visible = false;
 }
 function transition(fn, then) {
@@ -654,8 +659,12 @@ function updateOrbitMode(dt) {
   if (v.status === 'orbit' && !v.docked && v.kind !== 'carrier' && RECIPES[v.body] && !G.fadeState) {
     if (G.worldId !== v.body && world.groundAlt(v) < 60000) activateWorld(v.body);
     const alt = world.groundAlt(v);
-    if (alt < 48000) prewarm(v);
-    if (alt < F.TRANSITION_DOWN && v.v.dot(v.r) < 0 && terrain.pending < 12) enterSurface(v);
+    const descending = v.v.dot(v.r) < 0;
+    // A parking orbit also passes under 48 km. Stream terrain only on a landing trajectory.
+    const approaching = descending && (alt < F.TRANSITION_DOWN || v.numeric || v.ap?.type === 'descent'
+      || (v.el && v.el.rp - v.r.length() + alt < F.TRANSITION_DOWN));
+    if (alt < 48000 && approaching) prewarm(v);
+    if (alt < F.TRANSITION_DOWN && descending && terrain.pending < 12) enterSurface(v);
   }
   if (!RECIPES[v.body]) G.descentOrigin = false;
 }
@@ -1111,11 +1120,19 @@ function skiffTo(x, z, alt = 40, yaw = 0, board = true) {
 // ------------------------------------------------------------------ camera
 const camTarget = new V3(), camDesired = new V3();
 let bikeCamHeading = 0;
-function orbitBasis() {
+let orbitCameraCraft = null, cameraLon = 0, cameraLat = 0;
+function orbitBasis(dt = 0) {
   const v = world.active.docked ? world.carrier : world.active;
   const r = v.r.clone(); if (r.lengthSq() < 1) r.set(1, 0, 0);
   const { lon, lat } = lonLatOfDir(r.normalize());
-  return enu(lon, lat);
+  if (orbitCameraCraft !== v) {
+    orbitCameraCraft = v; cameraLon = lon; cameraLat = lat;
+  } else if (world.warpIndex === 0) {
+    const delta = lon - cameraLon, limit = dt * 0.8;
+    cameraLon += clamp(Math.atan2(Math.sin(delta), Math.cos(delta)), -limit, limit);
+    cameraLat += clamp(lat - cameraLat, -limit, limit);
+  }
+  return enu(cameraLon, cameraLat);
 }
 function updateCamera(dt, origin) {
   const cam = gfx.camera, c = G.cam;
@@ -1125,7 +1142,7 @@ function updateCamera(dt, origin) {
     camTarget.copy(rel);
     // keep the vessel centred: the scene origin is the reference vessel
     const d = c.dist * (v.docked ? 1 : 1);
-    const lb = orbitBasis();
+    const lb = orbitBasis(dt);
     camDesired.set(0, 0, 0).addScaledVector(lb.E, Math.sin(c.yaw) * Math.cos(c.pitch)).addScaledVector(lb.N, Math.cos(c.yaw) * Math.cos(c.pitch)).addScaledVector(lb.U, Math.sin(c.pitch)).multiplyScalar(d).add(camTarget);
     cam.position.copy(camDesired); cam.up.copy(lb.U); cam.lookAt(camTarget);
   } else if (G.camFree) {           // debug / photography: free camera in scene-local coordinates
@@ -1347,7 +1364,7 @@ function transferCargo() {
 function resupply() { const c = world.carrier; c.tanks.h2 = Math.min(CARRIER.propMax, c.tanks.h2 + 6000); say('Resupply drone delivered 6,000 kg hydrogen', 'ok'); }
 
 // ------------------------------------------------------------------ main loop
-let last = performance.now(), fpsAcc = 0, fpsN = 0;
+let last = performance.now(), fpsAcc = 0, fpsN = 0, nextMapDraw = 0;
 const _pq = new Q(), _pd = new V3();
 function updatePlasma(t) {
   for (const v of world.vessels) {
@@ -1394,9 +1411,16 @@ function frame(now) {
     else if (G.mode === 'onfoot') updateOnFoot(dt);
     else if (G.mode === 'bike') updateBike(dt);
     else if (G.mode === 'skiff') updateSkiff(dt);      // AETHEL
-    updatePlasma(G.time);
-    render(dt);
-    if (hud.isOpen('map')) { mapUI.draw(world.t); mapUI.refreshSide(false); }
+    const mapOpen = hud.isOpen('map');
+    if (mapOpen && G.mode === 'orbit') {
+      updateCamera(dt, (world.active.docked ? world.carrier : world.active).r);
+    } else {
+      updatePlasma(G.time);
+      render(dt);
+    }
+    if (mapOpen && (now >= nextMapDraw || mapUI.drag)) {
+      mapUI.draw(world.t); mapUI.refreshSide(false); nextMapDraw = now + 100;
+    } else if (!mapOpen) nextMapDraw = 0;
     updateHud(dt);
     if (!G.mapResized && hud.isOpen('map')) { }
   } else {

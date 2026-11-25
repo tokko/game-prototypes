@@ -137,7 +137,7 @@ export class World {
       let evHit = null;
       for (const v of this.vessels) {
         if (v.status !== 'orbit' || v.docked || !v.railed || !v.el) continue;
-        const nd = v.nodes.find((n) => n.t > this.t - 1e-6);
+        const nd = v.autoNodes !== false && v.nodes.find((n) => n.t > this.t - 1e-6);
         if (nd && nd.t - this.t < h) { h = Math.max(0, nd.t - this.t); evHit = { v, type: 'node', node: nd }; }
         if (v === this.active || v === this.carrier) {
           const ev = this.railsEvent(v);
