@@ -935,9 +935,9 @@ function updateBike(dt) {
     if (input.hit('KeyR')) bike.respawn(surfEnv());
     if (input.hit('KeyE') && bike.speed < 5 && bike.grounded > 0) dismountBike();
     if (input.wheel) G.cam.dist = clamp(G.cam.dist * (input.wheel > 0 ? 1.12 : 1 / 1.12), 3, 30);
-    if (input.drag || input.locked) { G.cam.off -= input.mouseDX * 0.005; G.cam.pitch = clamp(G.cam.pitch + input.mouseDY * 0.004, -0.2, 1.2); }
+    if (input.drag) { G.cam.off -= input.mouseDX * 0.005; G.cam.pitch = clamp(G.cam.pitch + input.mouseDY * 0.004, -0.2, 1.2); }
   }
-  if (!input.drag && !input.locked) G.cam.off *= Math.pow(0.3, dt);
+  if (!input.drag) G.cam.off *= Math.pow(0.3, dt);
   const env = surfEnv();
   const sub = Math.max(1, Math.ceil(dt * 180));
   for (let i = 0; i < sub; i++) bike.step(dt / sub, ctlB, env);
@@ -1087,6 +1087,7 @@ function skiffTo(x, z, alt = 40, yaw = 0, board = true) {
 
 // ------------------------------------------------------------------ camera
 const camTarget = new V3(), camDesired = new V3();
+let bikeCamHeading = 0;
 function orbitBasis() {
   const v = world.active.docked ? world.carrier : world.active;
   const r = v.r.clone(); if (r.lengthSq() < 1) r.set(1, 0, 0);
@@ -1106,6 +1107,28 @@ function updateCamera(dt, origin) {
     cam.position.copy(camDesired); cam.up.copy(lb.U); cam.lookAt(camTarget);
   } else if (G.camFree) {           // debug / photography: free camera in scene-local coordinates
     const f = G.camFree; cam.position.set(f.x, f.y, f.z); cam.up.set(0, 1, 0); cam.lookAt(f.tx, f.ty, f.tz); camTarget.set(f.tx, f.ty, f.tz); G.camYaw = Math.atan2(f.tx - f.x, -(f.tz - f.z));
+  } else if (G.mode === 'bike') {
+    const targetY = bike.p.y + 0.9;
+    if (G.camInit !== 'bike') {
+      bikeCamHeading = bike.yaw;
+      camTarget.y = targetY;
+      G.camInit = 'bike';
+    } else if (bike.grounded && !bike.crashed && Math.hypot(bike.v.x, bike.v.z) > 1) {
+      const forward = bike.forward;
+      const reversing = bike.v.x * forward.x + bike.v.z * forward.z < 0;
+      const track = Math.atan2(bike.v.x, -bike.v.z) + (reversing ? Math.PI : 0);
+      const delta = track - bikeCamHeading;
+      const turn = Math.atan2(Math.sin(delta), Math.cos(delta)) * -Math.expm1(-3 * dt);
+      bikeCamHeading += clamp(turn, -1.6 * dt, 1.6 * dt);
+    }
+    // Move horizontally with the rider and absorb suspension motion at a shared camera pivot.
+    camTarget.x = bike.p.x; camTarget.z = bike.p.z;
+    camTarget.y += (targetY - camTarget.y) * -Math.expm1(-6 * dt);
+    const yaw = bikeCamHeading + Math.PI + c.off;
+    cam.position.set(Math.sin(yaw) * Math.cos(c.pitch), Math.sin(c.pitch), -Math.cos(yaw) * Math.cos(c.pitch))
+      .multiplyScalar(c.dist).add(camTarget);
+    cam.position.y = Math.max(cam.position.y, terrain.h(cam.position.x, cam.position.z) + 1);
+    cam.up.set(0, 1, 0); cam.lookAt(camTarget); G.camYaw = yaw;
   } else {
     let tgt, yaw, dist = c.dist, pitch = c.pitch;
     if (G.mode === 'flight') {
@@ -1123,7 +1146,6 @@ function updateCamera(dt, origin) {
       yaw = s.heading + Math.PI + c.off; dist = c.dist; }
     } else if (G.mode === 'onfoot') { tgt = player.p.clone(); tgt.y += 1.5; yaw = c.yaw + Math.PI; }
     else if (G.mode === 'skiff') { tgt = skiff.p.clone(); tgt.y += 1.3; yaw = skiff.yaw + Math.PI + c.off; dist = c.dist; }      // AETHEL
-    else { const ang = bike.yaw; tgt = bike.p.clone(); tgt.y += 0.9; yaw = ang + Math.PI + c.off; }
     // smooth follow
     const d = new V3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)).multiplyScalar(dist);
     // yaw convention: camera sits behind (opposite the heading vector (sin h, -cos h))
@@ -1132,7 +1154,7 @@ function updateCamera(dt, origin) {
     const gh = terrain.h(wantPos.x, wantPos.z);
     if (wantPos.y < gh + 1.0) wantPos.y = gh + 1.0;
     if (G.camInit !== G.mode) { cam.position.copy(wantPos); G.camInit = G.mode; }
-    cam.position.lerp(wantPos, 1 - Math.pow(G.mode === 'skiff' ? 1e-6 : G.mode === 'bike' ? 0.0005 : 0.002, dt));
+    cam.position.lerp(wantPos, 1 - Math.pow(G.mode === 'skiff' ? 1e-6 : 0.002, dt));
     camTarget.lerp(tgt, 1 - Math.pow(G.mode === 'skiff' ? 1e-7 : 0.0001, dt));
     if (G.camInit === G.mode && camTarget.distanceTo(tgt) > 50) camTarget.copy(tgt);
     cam.up.set(0, 1, 0); cam.lookAt(camTarget);
