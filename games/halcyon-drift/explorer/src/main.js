@@ -127,7 +127,13 @@ world.carrier.model = M.carrier; world.lander.model = M.lander; world.plane.mode
 const player = new Player(M.astro); const bike = new Bike(M.bike);
 const skiff = new Skiff();      // AETHEL
 M.astro.group.visible = false; M.bike.group.visible = false;
-const mapUI = new SystemMap(world, { toast: (t, k) => hud.toast(t, k) });
+const mapUI = new SystemMap(world, {
+  toast: (t, k) => hud.toast(t, k), dock: dockCraft,
+  surfacePosition(v) {
+    const s = v.surf, origin = SW[v.body].terrain.origin;
+    return F.surfaceToOrbit(s.p.x + (s.abs ? 0 : origin.x), s.p.y, s.p.z + (s.abs ? 0 : origin.z), s.vel, s.q, BODIES[v.body].R).r;
+  },
+});
 
 // state
 const G = {
@@ -591,6 +597,13 @@ function undockCraft(d) {
 }
 function dockCraft() {
   const d = world.active;
+  if (world.dockAssist) return;
+  if (d.target) {
+    const host = d.target.docked ? world.carrier : d.target;
+    if (d === world.carrier && host !== d) return world.startDock(host);
+    if (host === world.carrier && d !== host) return world.startDock(d);
+    return say(host === d ? 'That craft is already aboard Wayfarer' : 'Albatross and Prospector dock at Wayfarer’s ports', 'info');
+  }
   if (d.kind === 'carrier') { const free = [world.plane, world.lander].find((x) => !x.docked && x.status === 'orbit' && x.body === d.body); if (free) return world.startDock(free); return say('No free craft nearby', 'info'); }
   world.startDock(d);
 }
@@ -1189,7 +1202,14 @@ function updateHud(dt) {
     dvText = v.dvRemaining(world, {}).toFixed(0) + ' m/s' + (v.kind === 'carrier' ? '' : '');
     if (v.docked) prompts.push('U|Undock Albatross', 'I|Undock ' + world.lander.name);
     else if (v.kind === 'carrier') prompts.push('M|Open the map', 'U|Undock Albatross');
-    else { prompts.push('G|Begin descent'); if (world.carrier.status === 'orbit' && world.carrier.body === v.body) prompts.push('C|Dock with Wayfarer'); }
+    else { prompts.push('G|Begin descent'); if ((!v.target || v.target === world.carrier || v.target.docked) && world.carrier.body === v.body) prompts.push('C|Dock with Wayfarer'); }
+    if (v.target) {
+      const host = v.target.docked ? world.carrier : v.target;
+      const sameOrbit = v.body === host.body && host.status === 'orbit';
+      rows[2] = { l: v.target.name, v: sameOrbit
+        ? fmtM(v.r.distanceTo(host.r)) + ' · ' + v.v.distanceTo(host.v).toFixed(1) + ' m/s rel'
+        : (BODIES[host.body]?.name || SUN.name) };
+    }
     hud.bar('b-thr', v.thrCmd || 0, !v.docked && v.status === 'orbit', 'THR');
   } else if (mode === 'flight') {
     const s = v.surf;

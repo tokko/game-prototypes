@@ -34,6 +34,8 @@ Open `http://localhost:8791/` in a Chromium-based browser (WebGL2, internet acce
 
 Every HUD button mirrors a key and works; the map has its own buttons (plan, warp to window, node editor).
 
+Press `M` and select a ship in **Fleet** or click its map marker to target it from the craft you are piloting. The flight HUD shows range and relative speed when both ships orbit the same body. **Plan rendezvous** replaces the piloted ship's maneuver nodes with an intercept and a velocity match roughly 200 m behind the target. Use **Dock** or `C` within 12 km for either of Wayfarer's two ports.
+
 ## Space-to-surface transition
 
 Orbit view (`orbit` mode) renders the body as a shader sphere (baked low-res map of the *same* height recipe as the terrain + procedural craters)

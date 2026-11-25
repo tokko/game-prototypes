@@ -27,6 +27,35 @@ export function nodeComponents(r, v, dv) {
   const pro = v.clone().normalize(), nrm = new Vector3().crossVectors(r, v).normalize(), rad = new Vector3().crossVectors(pro, nrm);
   return { pro: dv.dot(pro), nrm: dv.dot(nrm), rad: dv.dot(rad) };
 }
+/** Intercept a coasting fleet vessel, then match its velocity at arrival. */
+export function planRendezvous(w, v, target) {
+  if (!target || target === v || v.body !== target.body || v.status !== 'orbit' || target.status !== 'orbit'
+      || !v.el || !target.el || v.numeric || v.ap || w.dockAssist || target.numeric || target.nodes.length || target.ap || target.burn)
+    return { error: 'Both craft need stable orbits around the same body and the target must be coasting.' };
+  const dep = w.t + 30, mu = S.muOf(v.body), start = S.stateAt(v.el, dep);
+  const period = TAU * Math.sqrt(start.r.length() ** 3 / mu);
+  let best = null;
+  for (const fraction of [0.08, 0.18, 0.3, 0.45, 0.65, 0.85]) {
+    const tof = period * fraction, arrival = dep + tof;
+    // Form up about 200 m astern on the target's orbit, clear of its hull.
+    const lag = 200 / Math.max(1, S.stateAt(target.el, arrival).v.length());
+    const end = S.stateAt(target.el, arrival - lag);
+    const leg = S.lambert(mu, start.r, end.r, tof);
+    if (!leg) continue;
+    const el = S.elementsFromState(mu, start.r, leg.v1, dep);
+    if (el.rp <= (BODIES[v.body]?.R || 0) || S.stateAt(el, dep + tof).r.distanceTo(end.r) > 100) continue;
+    if (S.findEvent(v.body, el, dep, 0, tof).t <= arrival || S.findEvent(target.body, target.el, w.t, 0, arrival - w.t).t <= arrival) continue;
+    const out = leg.v1.clone().sub(start.v), match = end.v.clone().sub(leg.v2);
+    const cost = out.length() + match.length();
+    if (!best || cost < best.cost) best = { cost, nodes: [
+      { t: dep, dv: nodeComponents(start.r, start.v, out) },
+      { t: dep + tof, dv: nodeComponents(end.r, leg.v2, match) },
+    ] };
+  }
+  if (!best) return { error: 'No clear intercept found from this orbit.' };
+  if (best.cost > v.dvRemaining(w)) return { error: 'Insufficient propellant for the intercept and velocity match.' };
+  return best;
+}
 /** state at time t on a predicted chain (frame of the patch containing t) */
 export function chainState(patches, t) {
   for (const p of patches) if (t >= p.t0 && t <= p.t1) { const s = S.stateAt(p.el, t, { r: new Vector3(), v: new Vector3() }); return { r: s.r, v: s.v, p }; }

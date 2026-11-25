@@ -5,7 +5,7 @@ import { Vector3 } from 'three';
 import * as S from './system.js';
 import { BODIES, SUN, DESTINATIONS, orbitAngle, parkRadius, circSpeed } from './destinations.js';
 import { planLeg } from './transfer.js';
-import { planTransfer } from './planner.js';
+import { planTransfer, planRendezvous } from './planner.js';
 import { landerDv, planeDv, carrierDv, LANDER, PLANE } from './craft.js';
 import { WARP, NODE_STEPS } from './world.js';
 import { ascentReport } from './ascent.js';
@@ -65,6 +65,7 @@ export class SystemMap {
     let best = null, bd = 18;
     for (const h of this.hit) { const d = Math.hypot(h.x - px, h.y - py); if (d < bd) { bd = d; best = h; } }
     if (best) {
+      if (best.vessel) { this.action('target', best.id); return; }
       this.sel = best.id; this.plan = null; this.refreshSide(true);
       if (dbl && (BODIES[best.id]?.children?.length)) this.setView(best.id);
     }
@@ -101,12 +102,34 @@ export class SystemMap {
     }
     // vessels + chain
     this.drawChain(c, t);
+    this.drawFleet(c, t);
     // header
     c.fillStyle = '#cfe0f5'; c.font = '12px ui-monospace,monospace'; c.textAlign = 'left';
     c.fillText(`View: ${V === S.ROOT ? 'Halcyon system' : BODIES[V].name + ' system'}   UT ${fmtUT(t)}   warp ${WARP[this.w.warpIndex]}x`, 14, H - 14);
     c.fillStyle = '#8d9bb0'; c.fillText('wheel zoom - drag pan - click select - double-click a planet with moons to zoom in', 14, H - 32);
   }
   vecXZ(s) { return [s.r.x, s.r.z]; }
+  fleetPosition(v, t) {
+    const craft = v.docked ? this.w.carrier : v;
+    const local = craft.status === 'surface' ? this.api.surfacePosition(craft) : craft.r;
+    return S.bodyIn(craft.body, this.view, t).r.add(local);
+  }
+  drawFleet(c, t) {
+    const occupied = [];
+    for (const v of this.w.vessels) {
+      const pos = this.fleetPosition(v, t), [x, y] = this.toPx(pos.x, pos.z);
+      let row = y;
+      while (occupied.some(p => Math.abs(p.x - x) < 95 && Math.abs(p.y - row) < 15)) row += 16;
+      occupied.push({ x, y: row });
+      const color = v === this.w.active.target ? '#ffb347' : v === this.w.active ? '#7fd8ff' : '#e2eaf3';
+      c.strokeStyle = color; c.fillStyle = color; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(x, y); c.lineTo(x + 12, row - 9); c.stroke();
+      c.fillRect(x + 10, row - 11, 5, 5);
+      c.font = '600 11px system-ui'; c.textAlign = 'left'; c.fillText(v.name, x + 20, row - 5);
+      this.hit.push({ id: v.id, vessel: true, x: x + 12, y: row - 9 });
+      this.hit.push({ id: v.id, vessel: true, x: x + 40, y: row - 9 });
+    }
+  }
   col(b) { const p = b.palette?.c2 || [0.8, 0.8, 0.8]; return `rgb(${p.map((x) => Math.round(Math.min(1, x * 1.15) * 255)).join(',')})`; }
   disc(x, y, r, color, label, id, dest, isCenter, selectable = true) {
     const c = this.ctx;
@@ -144,11 +167,6 @@ export class SystemMap {
         if (tp >= p.t0 && tp <= p.t1 && (p.el.hyper) && p.bodyId !== S.ROOT) { const [x, z] = pos(p, tp); const [px, py] = this.toPx(x, z); c.fillStyle = '#ffb347'; c.beginPath(); c.arc(px, py, 3.2, 0, TAU); c.fill(); c.font = '10px ui-monospace,monospace'; c.fillText('Pe ' + fmtDist(p.el.rp - (BODIES[p.bodyId]?.R || 0)), px + 6, py + 12); }
       }
     });
-    // ship marker
-    const ab = S.bodyAbs(v.body, t), f = S.bodyAbs(V, t);
-    const [sx, sz] = [ab.r.x + v.r.x - f.r.x, ab.r.z + v.r.z - f.r.z]; const [spx, spy] = this.toPx(sx, sz);
-    c.fillStyle = '#7fd8ff'; c.beginPath(); c.moveTo(spx, spy - 7); c.lineTo(spx + 6, spy + 5); c.lineTo(spx - 6, spy + 5); c.closePath(); c.fill();
-    c.font = '600 11px system-ui'; c.fillStyle = '#7fd8ff'; c.textAlign = 'left'; c.fillText(v.name, spx + 9, spy + 14);
     // closest approach to the selected body
     if (this.sel && patches.length && BODIES[this.sel]) {
       const key = this.w.nodeRev + ':' + this.sel + ':' + patches.length;
@@ -174,7 +192,26 @@ export class SystemMap {
     const now = performance.now(); if (!force && now - this.lastSide < 450) return; this.lastSide = now;
     const w = this.w, t = w.t, id = this.sel, b = BODIES[id], v = w.active;
     const esc = (s) => s;
-    let h = '';
+    let h = '<h3>Fleet</h3><div class="btns">';
+    for (const craft of w.vessels) {
+      const status = craft.docked ? 'aboard Wayfarer' : craft.status === 'surface' ? 'surface' : 'orbit';
+      h += `<button data-a="target" data-v="${craft.id}" ${craft === v ? 'disabled' : ''} class="${craft === v.target ? 'on' : ''}">${craft.name} · ${craft === v ? 'piloting' : status}</button>`;
+    }
+    h += '</div>';
+    if (v.target) {
+      const target = v.target, host = target.docked ? w.carrier : target;
+      const range = this.fleetPosition(v, t).distanceTo(this.fleetPosition(target, t));
+      h += `<p>Target: <b>${target.name}</b> · ${BODIES[host.body]?.name || SUN.name} · ${range < 10000 ? Math.round(range) + ' m' : fmtDist(range)}`;
+      if (v.body === host.body && v.status === 'orbit' && host.status === 'orbit')
+        h += ` · relative speed ${v.v.distanceTo(host.v).toFixed(1)} m/s`;
+      h += '</p><div class="btns">';
+      if (host !== v && v.body === host.body && v.status === 'orbit' && host.status === 'orbit') {
+        h += `<button data-a="intercept">${v.nodes.length ? 'Replace nodes with rendezvous' : 'Plan rendezvous'}</button>`;
+        if ((v === w.carrier || host === w.carrier) && range <= 12000)
+          h += '<button data-a="dock">Dock</button>';
+      }
+      h += '<button data-a="untarget">Clear target</button></div>';
+    }
     if (b) {
       h += `<h3>${b.name}</h3><div class="dim">${b.kind === 'moon' ? 'Moon of ' + BODIES[b.parent].name : b.kind === 'giant' ? 'Gas / ice giant' : 'Planet'}${b.destination ? ' - destination' : ''}</div><p>${b.blurb}</p>`;
       h += '<table>';
@@ -233,7 +270,21 @@ export class SystemMap {
   action(a, val) {
     const w = this.w, v = w.active;
     const needOrbit = () => { if (v.status !== 'orbit' || v.docked) { this.api.toast('Pick a craft in orbit first', 'warn'); return false; } return true; };
-    if (a === 'view') this.setView(val);
+    if (a === 'target') {
+      const target = w.vessels.find(craft => craft.id === val);
+      if (!target || target === v) return;
+      v.target = target;
+      const body = target.docked ? w.carrier.body : target.body;
+      this.setView(body);
+      const p = this.fleetPosition(target, w.t);
+      this.pan.x = p.x; this.pan.z = p.z;
+    } else if (a === 'untarget') v.target = null;
+    else if (a === 'dock') this.api.dock();
+    else if (a === 'intercept') {
+      const result = planRendezvous(w, v, v.target?.docked ? w.carrier : v.target);
+      if (result.error) this.api.toast(result.error, 'warn');
+      else { v.nodes = result.nodes; w.touchNodes(); this.nodeSel = 0; this.api.toast(`Rendezvous with ${v.target.name} plotted: intercept and match velocity`, 'ok'); }
+    } else if (a === 'view') this.setView(val);
     else if (a === 'warp-') w.setWarp(w.warpIndex - 1);
     else if (a === 'warp+') w.setWarp(w.warpIndex + 1);
     else if (a === 'warp0') { w.warpIndex = 0; w.warpTo = null; }

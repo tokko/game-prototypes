@@ -17,6 +17,7 @@ export class Vessel {
     this.docked = kind !== 'carrier';
     this.status = 'orbit';          // 'orbit' | 'surface' | 'docked'
     this.nodes = [];
+    this.target = null;
     this.throttle = 0;
     this.sas = 'free';              // free | pro | retro | up | node | target
     this.ap = null;                 // orbit-mode autopilot {type}
